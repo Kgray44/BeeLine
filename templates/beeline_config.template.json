@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "notes": [
+    "This is a safe placeholder template.",
+    "Create local plant machine configuration in config/beeline_config.json.",
+    "Never commit real machine data, employee names, badge IDs, issue history, or secrets."
+  ],
+  "machines": []
+}

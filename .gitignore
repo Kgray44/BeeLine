@@ -1,0 +1,46 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets and local-only environment files
+.env
+.env.*
+*.pem
+*.key
+*secret*
+*token*
+*password*
+*credential*
+
+# Runtime configuration and data. Keep only README/.gitkeep placeholders.
+config/*
+!config/.gitkeep
+!config/README.md
+
+data/*
+!data/.gitkeep
+!data/README.md
+
+archive/*
+!archive/.gitkeep
+!archive/README.md
+
+backups/*
+!backups/.gitkeep
+!backups/README.md
+
+logs/*
+!logs/.gitkeep
+!logs/README.md
+
+# Do not commit approved/private brand assets without explicit approval.
+assets/branding/nolato_logo.png
+
+# Local design notes and generated exports are NDA-sensitive unless reviewed.
+*.pdf
+*.log
+*.zip
+*.bak
+~$*
