@@ -16,6 +16,7 @@ MIN_CARD_WIDTH = 265
 class HiveDashboardPage(HoneycombBackground):
     machine_selected = Signal(str)
     open_issues_requested = Signal()
+    predictive_requested = Signal()
 
     def __init__(self, repository: IssueRepository, theme_manager: ThemeManager, paths: AppPaths, parent=None):
         super().__init__(theme_manager, parent)
@@ -39,6 +40,10 @@ class HiveDashboardPage(HoneycombBackground):
         open_issues.setObjectName("primaryButton")
         open_issues.clicked.connect(self.open_issues_requested.emit)
         header.addWidget(open_issues)
+        predictive = QPushButton("Predictive Maintenance")
+        predictive.setObjectName("primaryButton")
+        predictive.clicked.connect(self.predictive_requested.emit)
+        header.addWidget(predictive)
         header.addWidget(ThemeToggleButton(theme_manager))
         page_layout.addLayout(header)
 

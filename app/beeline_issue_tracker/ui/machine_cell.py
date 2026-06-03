@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -10,8 +11,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from beeline_issue_tracker.analytics.predictive_service import PredictiveMaintenanceService
 from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.repository import IssueRepository
+from beeline_issue_tracker.ui.charts import RiskScoreBar
 from beeline_issue_tracker.ui.theme import ThemeManager, repolish, status_state
 from beeline_issue_tracker.ui.widgets import (
     BrandHeader,
@@ -29,12 +32,21 @@ class MachineCellPage(HoneycombBackground):
     log_issue_requested = Signal(str)
     resolve_issue_requested = Signal(int)
     issue_detail_requested = Signal(int, str)
+    predictive_details_requested = Signal(str)
 
-    def __init__(self, repository: IssueRepository, theme_manager: ThemeManager, paths: AppPaths, parent=None):
+    def __init__(
+        self,
+        repository: IssueRepository,
+        theme_manager: ThemeManager,
+        paths: AppPaths,
+        predictive_service: PredictiveMaintenanceService | None = None,
+        parent=None,
+    ):
         super().__init__(theme_manager, parent)
         self.repository = repository
         self.theme_manager = theme_manager
         self.paths = paths
+        self.predictive_service = predictive_service
         self.machine_number: str | None = None
 
         page = QVBoxLayout(self)
@@ -99,6 +111,55 @@ class MachineCellPage(HoneycombBackground):
         memory_layout.addWidget(self.memory_summary)
         page.addWidget(self.memory_panel)
 
+        self.intelligence_panel = QFrame()
+        self.intelligence_panel.setObjectName("infoPanel")
+        intelligence_layout = QVBoxLayout(self.intelligence_panel)
+        intelligence_layout.setContentsMargins(16, 12, 16, 12)
+        intelligence_layout.setSpacing(8)
+        intelligence_title = QLabel("Maintenance Intelligence")
+        intelligence_title.setObjectName("sectionTitle")
+        intelligence_layout.addWidget(intelligence_title)
+        intelligence_grid = QGridLayout()
+        intelligence_grid.setHorizontalSpacing(12)
+        intelligence_grid.setVerticalSpacing(6)
+        self.risk_score_bar = RiskScoreBar(theme_manager)
+        intelligence_grid.addWidget(self.risk_score_bar, 0, 0, 1, 4)
+        self.intelligence_confidence = QLabel()
+        self.intelligence_confidence.setObjectName("mutedLabel")
+        self.intelligence_predicted_problem = QLabel()
+        self.intelligence_predicted_problem.setWordWrap(True)
+        self.intelligence_suggested_action = QLabel()
+        self.intelligence_suggested_action.setWordWrap(True)
+        self.intelligence_reasons = QLabel()
+        self.intelligence_reasons.setObjectName("mutedLabel")
+        self.intelligence_reasons.setWordWrap(True)
+        self.intelligence_recurring = QLabel()
+        self.intelligence_recurring.setObjectName("mutedLabel")
+        self.intelligence_last_issue = QLabel()
+        self.intelligence_last_issue.setObjectName("mutedLabel")
+        intelligence_grid.addWidget(QLabel("Confidence"), 1, 0)
+        intelligence_grid.addWidget(self.intelligence_confidence, 1, 1)
+        intelligence_grid.addWidget(QLabel("Recurring"), 1, 2)
+        intelligence_grid.addWidget(self.intelligence_recurring, 1, 3)
+        intelligence_grid.addWidget(QLabel("Predicted Problem"), 2, 0)
+        intelligence_grid.addWidget(self.intelligence_predicted_problem, 2, 1, 1, 3)
+        intelligence_grid.addWidget(QLabel("Suggested Action"), 3, 0)
+        intelligence_grid.addWidget(self.intelligence_suggested_action, 3, 1, 1, 3)
+        intelligence_grid.addWidget(QLabel("Risk Reasons"), 4, 0)
+        intelligence_grid.addWidget(self.intelligence_reasons, 4, 1, 1, 3)
+        intelligence_grid.addWidget(QLabel("Last Issue"), 5, 0)
+        intelligence_grid.addWidget(self.intelligence_last_issue, 5, 1, 1, 3)
+        intelligence_layout.addLayout(intelligence_grid)
+        intelligence_buttons = QHBoxLayout()
+        for label in ("View Predictive Details", "View Trends", "View Related History"):
+            button = QPushButton(label)
+            button.setObjectName("tableActionButton")
+            button.clicked.connect(self._request_predictive_details)
+            intelligence_buttons.addWidget(button)
+        intelligence_buttons.addStretch(1)
+        intelligence_layout.addLayout(intelligence_buttons)
+        page.addWidget(self.intelligence_panel)
+
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.active_list = IssueListView(
             "active",
@@ -144,6 +205,7 @@ class MachineCellPage(HoneycombBackground):
             self.open_issue_pill.set_value("0")
             self.recent_resolved_pill.set_value("0")
             self.memory_summary.setText("No resolved history yet.")
+            self._set_intelligence_empty()
             self.active_list.set_issues([])
             self.resolved_list.set_issues([])
             return
@@ -176,12 +238,44 @@ class MachineCellPage(HoneycombBackground):
         self.open_issue_pill.set_value(str(summary.open_issue_count))
         self.recent_resolved_pill.set_value(str(stats.total_resolved))
         self.memory_summary.setText(_memory_text(stats))
+        self._update_intelligence(summary.machine_number)
         self.active_list.set_issues(active_issues)
         self.resolved_list.set_issues(recent_resolved)
 
     def _request_log_issue(self) -> None:
         if self.machine_number:
             self.log_issue_requested.emit(self.machine_number)
+
+    def _request_predictive_details(self) -> None:
+        if self.machine_number:
+            self.predictive_details_requested.emit(self.machine_number)
+
+    def _update_intelligence(self, machine_number: str) -> None:
+        if self.predictive_service is None:
+            self._set_intelligence_empty()
+            return
+        risk = self.predictive_service.get_machine_risk(machine_number)
+        if risk is None:
+            self._set_intelligence_empty()
+            return
+        self.risk_score_bar.set_score(risk.risk_score, risk.risk_level)
+        self.intelligence_confidence.setText(risk.confidence)
+        self.intelligence_predicted_problem.setText(risk.predicted_problem)
+        self.intelligence_suggested_action.setText(risk.suggested_action)
+        self.intelligence_reasons.setText(" | ".join(risk.risk_reasons[:3]))
+        self.intelligence_recurring.setText(str(risk.recurring_issue_count))
+        avg = _format_minutes(risk.average_time_open_minutes)
+        last_issue = risk.last_issue_at or "-"
+        self.intelligence_last_issue.setText(f"{last_issue} | Avg open: {avg}")
+
+    def _set_intelligence_empty(self) -> None:
+        self.risk_score_bar.set_score(0, "Unknown")
+        self.intelligence_confidence.setText("Unknown")
+        self.intelligence_predicted_problem.setText("No clear recurring problem")
+        self.intelligence_suggested_action.setText("No action needed beyond normal checks.")
+        self.intelligence_reasons.setText("Not enough issue history yet.")
+        self.intelligence_recurring.setText("0")
+        self.intelligence_last_issue.setText("-")
 
 
 def _memory_text(stats) -> str:
@@ -203,6 +297,18 @@ def _format_seconds(seconds: int | None) -> str:
     if seconds is None:
         return "-"
     minutes = seconds // 60
+    hours = minutes // 60
+    days = hours // 24
+    if days:
+        return f"{days}d {hours % 24}h"
+    if hours:
+        return f"{hours}h {minutes % 60}m"
+    return f"{minutes}m"
+
+
+def _format_minutes(minutes: int | None) -> str:
+    if minutes is None:
+        return "-"
     hours = minutes // 60
     days = hours // 24
     if days:

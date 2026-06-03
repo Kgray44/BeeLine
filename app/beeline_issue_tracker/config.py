@@ -37,9 +37,23 @@ class MachineConfig:
 
 
 @dataclass(frozen=True)
+class AnalyticsConfig:
+    enabled: bool = True
+    risk_window_days: int = 30
+    recurrence_window_days: int = 60
+    high_risk_threshold: int = 65
+    critical_risk_threshold: int = 85
+    grouped_chart_periods: int = 8
+    persist_predictive_alerts: bool = True
+    enable_fix_suggestions: bool = True
+    enable_related_issues: bool = True
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     machines: tuple[MachineConfig, ...]
     roles: dict[str, RoleConfig]
+    analytics: AnalyticsConfig = AnalyticsConfig()
 
     def machine_rows(self) -> tuple[tuple[str, str, str, str, str, int], ...]:
         return tuple(machine.as_database_row() for machine in self.machines)
@@ -166,7 +180,11 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
         except KeyError as exc:
             raise ValueError(f"Machine config row {index} is missing {exc.args[0]!r}.") from exc
 
-    return RuntimeConfig(machines=tuple(machines), roles=_load_roles(raw.get("roles", {})))
+    return RuntimeConfig(
+        machines=tuple(machines),
+        roles=_load_roles(raw.get("roles", {})),
+        analytics=_load_analytics(raw.get("analytics", {})),
+    )
 
 
 def _load_roles(raw_roles: object) -> dict[str, RoleConfig]:
@@ -184,3 +202,88 @@ def _load_roles(raw_roles: object) -> dict[str, RoleConfig]:
             pin_hash=str(raw_role.get("pin_hash", "") or "").strip(),
         )
     return roles
+
+
+def _load_analytics(raw_analytics: object) -> AnalyticsConfig:
+    defaults = AnalyticsConfig()
+    if not isinstance(raw_analytics, dict):
+        raw_analytics = {}
+
+    return AnalyticsConfig(
+        enabled=_bool_setting(raw_analytics, "enabled", defaults.enabled),
+        risk_window_days=_int_setting(raw_analytics, "risk_window_days", defaults.risk_window_days, minimum=1),
+        recurrence_window_days=_int_setting(
+            raw_analytics,
+            "recurrence_window_days",
+            defaults.recurrence_window_days,
+            minimum=1,
+        ),
+        high_risk_threshold=_int_setting(
+            raw_analytics,
+            "high_risk_threshold",
+            defaults.high_risk_threshold,
+            minimum=1,
+            maximum=100,
+        ),
+        critical_risk_threshold=_int_setting(
+            raw_analytics,
+            "critical_risk_threshold",
+            defaults.critical_risk_threshold,
+            minimum=1,
+            maximum=100,
+        ),
+        grouped_chart_periods=_int_setting(
+            raw_analytics,
+            "grouped_chart_periods",
+            defaults.grouped_chart_periods,
+            minimum=1,
+            maximum=52,
+        ),
+        persist_predictive_alerts=_bool_setting(
+            raw_analytics,
+            "persist_predictive_alerts",
+            defaults.persist_predictive_alerts,
+        ),
+        enable_fix_suggestions=_bool_setting(
+            raw_analytics,
+            "enable_fix_suggestions",
+            defaults.enable_fix_suggestions,
+        ),
+        enable_related_issues=_bool_setting(
+            raw_analytics,
+            "enable_related_issues",
+            defaults.enable_related_issues,
+        ),
+    )
+
+
+def _bool_setting(raw: dict[str, object], key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return default
+
+
+def _int_setting(
+    raw: dict[str, object],
+    key: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    try:
+        value = int(raw.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    if value < minimum:
+        return default
+    if maximum is not None and value > maximum:
+        return default
+    return value
