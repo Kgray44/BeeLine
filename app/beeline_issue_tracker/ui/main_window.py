@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QThreadPool
+from PySide6.QtCore import QEasingCurve, QPoint, QParallelAnimationGroup, QPropertyAnimation, QThreadPool
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QMainWindow, QMessageBox, QStackedWidget
 
 from beeline_issue_tracker.config import AppPaths
@@ -21,38 +21,65 @@ logger = logging.getLogger(__name__)
 class FadeStackedWidget(QStackedWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._animation: QPropertyAnimation | None = None
+        self._animation: QParallelAnimationGroup | None = None
         self._effect: QGraphicsOpacityEffect | None = None
+        self._animated_widget = None
+        self._animated_target_pos: QPoint | None = None
 
     def set_current_widget_animated(self, widget) -> None:
         if self.currentWidget() == widget:
             return
         self._clear_animation()
         self.setCurrentWidget(widget)
+        start_pos = widget.pos()
         self._effect = QGraphicsOpacityEffect(widget)
-        self._effect.setOpacity(0.2)
+        self._effect.setOpacity(0.0)
         widget.setGraphicsEffect(self._effect)
-        self._animation = QPropertyAnimation(self._effect, b"opacity", self)
-        self._animation.setDuration(200)
-        self._animation.setStartValue(0.2)
-        self._animation.setEndValue(1.0)
-        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._animation.finished.connect(lambda: self._finish_animation(widget))
+        widget.move(start_pos + QPoint(0, 10))
+        self._animated_widget = widget
+        self._animated_target_pos = start_pos
+
+        fade = QPropertyAnimation(self._effect, b"opacity", self)
+        fade.setDuration(190)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        slide = QPropertyAnimation(widget, b"pos", self)
+        slide.setDuration(190)
+        slide.setStartValue(start_pos + QPoint(0, 10))
+        slide.setEndValue(start_pos)
+        slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._animation = QParallelAnimationGroup(self)
+        self._animation.addAnimation(fade)
+        self._animation.addAnimation(slide)
+        self._animation.finished.connect(lambda: self._finish_animation(widget, start_pos))
         self._animation.start()
 
-    def _finish_animation(self, widget) -> None:
+    def _finish_animation(self, widget, final_pos=None) -> None:
+        if final_pos is not None:
+            widget.move(final_pos)
         widget.setGraphicsEffect(None)
         self._effect = None
         self._animation = None
+        self._animated_widget = None
+        self._animated_target_pos = None
 
     def _clear_animation(self) -> None:
         if self._animation is not None:
             self._animation.stop()
             self._animation = None
+        if self._animated_widget is not None:
+            if self._animated_target_pos is not None:
+                self._animated_widget.move(self._animated_target_pos)
+            self._animated_widget.setGraphicsEffect(None)
         current = self.currentWidget()
         if current is not None:
             current.setGraphicsEffect(None)
         self._effect = None
+        self._animated_widget = None
+        self._animated_target_pos = None
 
 
 class MainWindow(QMainWindow):

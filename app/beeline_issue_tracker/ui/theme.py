@@ -48,22 +48,22 @@ THEMES: dict[str, ThemeTokens] = {
     DARK_THEME: ThemeTokens(
         name=DARK_THEME,
         display_name="Dark Mode",
-        background="#10161d",
-        background_subtle="#151d25",
-        panel="#1b242c",
-        panel_hover="#222d36",
-        text_primary="#f7f3e8",
-        text_secondary="#b9c2c9",
-        border="#35424b",
-        accent="#f6b73c",
-        accent_muted="#8d6a2a",
-        button_background="#25313a",
-        button_hover="#2d3b45",
-        button_pressed="#172027",
-        button_text="#f7f3e8",
+        background="#141515",
+        background_subtle="#1b1d1e",
+        panel="#222426",
+        panel_hover="#2a2d2f",
+        text_primary="#f5f2ea",
+        text_secondary="#bbb8af",
+        border="#3a3d3f",
+        accent="#f3b333",
+        accent_muted="#7a642d",
+        button_background="#2b2e30",
+        button_hover="#343739",
+        button_pressed="#1b1d1e",
+        button_text="#f5f2ea",
         primary_button_text="#17120a",
-        input_background="#121b23",
-        input_border="#46545d",
+        input_background="#17191a",
+        input_border="#4a4d4f",
         status_line_down="#d64545",
         status_line_down_text="#fff7f0",
         status_non_critical="#f4c542",
@@ -72,27 +72,27 @@ THEMES: dict[str, ThemeTokens] = {
         status_no_issues_text="#07190f",
         status_unknown="#8a929a",
         status_unknown_text="#101418",
-        honeycomb_alpha=18,
+        honeycomb_alpha=12,
     ),
     LIGHT_THEME: ThemeTokens(
         name=LIGHT_THEME,
         display_name="Light Mode",
-        background="#f6f0e2",
-        background_subtle="#efe4cf",
-        panel="#fff8e9",
-        panel_hover="#f7ebd3",
-        text_primary="#1d252c",
-        text_secondary="#59636b",
-        border="#d8c8a7",
-        accent="#c98512",
-        accent_muted="#efd59c",
-        button_background="#f0dfbd",
-        button_hover="#e7cf9c",
-        button_pressed="#ddbf83",
-        button_text="#1d252c",
+        background="#f4f5f2",
+        background_subtle="#ecefea",
+        panel="#ffffff",
+        panel_hover="#f7f8f5",
+        text_primary="#202326",
+        text_secondary="#5d6468",
+        border="#d4d8d1",
+        accent="#c98205",
+        accent_muted="#f1d28b",
+        button_background="#eef0ec",
+        button_hover="#e3e7df",
+        button_pressed="#d8ddd3",
+        button_text="#202326",
         primary_button_text="#17120a",
-        input_background="#fffdf5",
-        input_border="#cbb78d",
+        input_background="#ffffff",
+        input_border="#c1c7bd",
         status_line_down="#cf3939",
         status_line_down_text="#fff7f0",
         status_non_critical="#e0a816",
@@ -101,7 +101,7 @@ THEMES: dict[str, ThemeTokens] = {
         status_no_issues_text="#f4fff8",
         status_unknown="#7f878c",
         status_unknown_text="#ffffff",
-        honeycomb_alpha=34,
+        honeycomb_alpha=20,
     ),
 }
 
@@ -230,7 +230,7 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
 
     QLabel#sectionTitle {{
         color: {tokens.accent};
-        font-size: 21px;
+        font-size: 20px;
         font-weight: 700;
     }}
 
@@ -252,14 +252,27 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         font-weight: 700;
     }}
 
+    QLabel#metricLabel,
+    QLabel#controlLabel {{
+        color: {tokens.text_secondary};
+        font-size: 13px;
+        font-weight: 650;
+    }}
+
+    QLabel#metricValue {{
+        color: {tokens.text_primary};
+        font-size: 17px;
+        font-weight: 750;
+    }}
+
     QPushButton {{
         background-color: {tokens.button_background};
         border: 1px solid {tokens.border};
-        border-radius: 6px;
+        border-radius: 7px;
         color: {tokens.button_text};
-        font-size: 17px;
+        font-size: 16px;
         font-weight: 650;
-        padding: 11px 16px;
+        padding: 10px 15px;
     }}
 
     QPushButton:hover {{
@@ -271,14 +284,22 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         background-color: {tokens.button_pressed};
     }}
 
-    QPushButton#primaryButton {{
+    QPushButton#primaryButton,
+    QPushButton#sectionPrimaryButton {{
         background-color: {tokens.accent};
         border-color: {tokens.accent};
         color: {tokens.primary_button_text};
+        font-weight: 800;
     }}
 
-    QPushButton#primaryButton:hover {{
+    QPushButton#primaryButton:hover,
+    QPushButton#sectionPrimaryButton:hover {{
         background-color: {tokens.status_non_critical};
+    }}
+
+    QPushButton#sectionPrimaryButton {{
+        padding: 8px 13px;
+        font-size: 15px;
     }}
 
     QPushButton#resolveButton {{
@@ -286,6 +307,20 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         border-color: {tokens.accent};
         color: {tokens.accent};
         padding: 8px 12px;
+    }}
+
+    QPushButton#tableActionButton {{
+        background-color: transparent;
+        border-color: {tokens.accent};
+        color: {tokens.accent};
+        padding: 6px 10px;
+        font-size: 14px;
+        font-weight: 750;
+    }}
+
+    QPushButton#tableActionButton:hover {{
+        background-color: {tokens.accent_muted};
+        color: {tokens.text_primary};
     }}
 
     QPushButton#themeToggleButton {{
@@ -316,8 +351,16 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
     QFrame#machineCard,
     QFrame#infoPanel,
     QFrame#issueCard,
-    QFrame#formPanel {{
+    QFrame#formPanel,
+    QFrame#machineHeader,
+    QFrame#listPanel {{
         background-color: {tokens.panel};
+        border: 1px solid {tokens.border};
+        border-radius: 8px;
+    }}
+
+    QFrame#metricPill {{
+        background-color: {tokens.background_subtle};
         border: 1px solid {tokens.border};
         border-radius: 8px;
     }}
@@ -328,27 +371,31 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
     }}
 
     QFrame#machineCard[statusState="line_down"],
+    QFrame#machineHeader[statusState="line_down"],
     QFrame#issueCard[statusState="line_down"] {{
-        border-left: 8px solid {tokens.status_line_down};
+        border-left: 5px solid {tokens.status_line_down};
     }}
 
     QFrame#machineCard[statusState="non_critical"],
+    QFrame#machineHeader[statusState="non_critical"],
     QFrame#issueCard[statusState="non_critical"] {{
-        border-left: 8px solid {tokens.status_non_critical};
+        border-left: 5px solid {tokens.status_non_critical};
     }}
 
     QFrame#machineCard[statusState="no_issues"],
+    QFrame#machineHeader[statusState="no_issues"],
     QFrame#issueCard[statusState="no_issues"] {{
-        border-left: 8px solid {tokens.status_no_issues};
+        border-left: 5px solid {tokens.status_no_issues};
     }}
 
     QFrame#machineCard[statusState="unknown"],
+    QFrame#machineHeader[statusState="unknown"],
     QFrame#issueCard[statusState="unknown"] {{
-        border-left: 8px solid {tokens.status_unknown};
+        border-left: 5px solid {tokens.status_unknown};
     }}
 
     QFrame#issueCard[archiveState="resolved"] {{
-        border-left: 8px solid {tokens.accent};
+        border-left: 5px solid {tokens.accent};
     }}
 
     QLabel#statusBadge {{
@@ -381,7 +428,7 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
     QLineEdit, QTextEdit, QComboBox {{
         background-color: {tokens.input_background};
         border: 1px solid {tokens.input_border};
-        border-radius: 6px;
+        border-radius: 7px;
         color: {tokens.text_primary};
         selection-background-color: {tokens.accent};
         selection-color: {tokens.primary_button_text};
@@ -400,6 +447,50 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
     QComboBox::drop-down {{
         border: 0;
         width: 28px;
+    }}
+
+    QLineEdit#searchBox {{
+        padding-left: 12px;
+    }}
+
+    QComboBox#compactDropdown {{
+        min-width: 128px;
+        padding: 7px 9px;
+    }}
+
+    QTableWidget#issueTable {{
+        background-color: {tokens.panel};
+        alternate-background-color: {tokens.background_subtle};
+        border: 1px solid {tokens.border};
+        border-radius: 7px;
+        color: {tokens.text_primary};
+        gridline-color: transparent;
+        selection-background-color: {tokens.panel_hover};
+        selection-color: {tokens.text_primary};
+    }}
+
+    QTableWidget#issueTable::item {{
+        border-bottom: 1px solid {tokens.border};
+        padding: 7px 8px;
+    }}
+
+    QTableWidget#issueTable::item:hover {{
+        background-color: {tokens.panel_hover};
+    }}
+
+    QHeaderView::section {{
+        background-color: {tokens.background_subtle};
+        border: 0;
+        border-bottom: 1px solid {tokens.border};
+        color: {tokens.text_secondary};
+        font-size: 13px;
+        font-weight: 750;
+        padding: 8px;
+    }}
+
+    QTableCornerButton::section {{
+        background-color: {tokens.background_subtle};
+        border: 0;
     }}
 
     QScrollArea {{

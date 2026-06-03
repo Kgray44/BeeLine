@@ -4,23 +4,20 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
-    QLabel,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QVBoxLayout,
-    QWidget,
 )
 
 from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.repository import IssueRepository
-from beeline_issue_tracker.ui.theme import ThemeManager
+from beeline_issue_tracker.ui.theme import ThemeManager, repolish, status_state
 from beeline_issue_tracker.ui.widgets import (
     BrandHeader,
     HoneycombBackground,
-    InfoRow,
-    IssueCard,
-    ResolvedIssueCard,
+    IssueListView,
+    MetricPill,
+    PrimaryActionButton,
     StatusBadge,
     ThemeToggleButton,
 )
@@ -42,87 +39,69 @@ class MachineCellPage(HoneycombBackground):
         page.setContentsMargins(24, 22, 24, 22)
         page.setSpacing(16)
 
-        header = QHBoxLayout()
+        nav = QHBoxLayout()
         self.back_button = QPushButton("Back to Hive Dashboard")
         self.back_button.clicked.connect(self.back_requested.emit)
-        header.addWidget(self.back_button)
-        header.addStretch(1)
-        self.log_button = QPushButton("Log Issue")
-        self.log_button.setObjectName("primaryButton")
-        self.log_button.clicked.connect(self._request_log_issue)
-        header.addWidget(self.log_button)
-        header.addWidget(ThemeToggleButton(theme_manager))
-        page.addLayout(header)
+        nav.addWidget(self.back_button)
+        nav.addStretch(1)
+        nav.addWidget(ThemeToggleButton(theme_manager))
+        page.addLayout(nav)
+
+        self.machine_header = QFrame()
+        self.machine_header.setObjectName("machineHeader")
+        header_layout = QVBoxLayout(self.machine_header)
+        header_layout.setContentsMargins(18, 16, 18, 16)
+        header_layout.setSpacing(14)
 
         title_row = QHBoxLayout()
+        title_row.setSpacing(14)
         self.brand_header = BrandHeader("Machine", "", paths.logo_path())
         title_row.addWidget(self.brand_header, 1)
         self.status_badge = StatusBadge("Unknown/Error")
         title_row.addWidget(self.status_badge)
-        page.addLayout(title_row)
+        self.log_button = PrimaryActionButton("+ Log Issue")
+        self.log_button.clicked.connect(self._request_log_issue)
+        title_row.addWidget(self.log_button)
+        header_layout.addLayout(title_row)
 
-        self.info_panel = QFrame()
-        self.info_panel.setObjectName("infoPanel")
-        self.info_layout = QVBoxLayout(self.info_panel)
-        self.info_layout.setContentsMargins(16, 14, 16, 14)
-        self.info_layout.setSpacing(8)
-        page.addWidget(self.info_panel)
+        metrics = QHBoxLayout()
+        metrics.setSpacing(10)
+        self.area_pill = MetricPill("Area")
+        self.cell_pill = MetricPill("Cell")
+        self.asset_pill = MetricPill("Asset Tag")
+        self.open_issue_pill = MetricPill("Open Issues")
+        self.recent_resolved_pill = MetricPill("Recent Resolved")
+        for pill in (
+            self.area_pill,
+            self.cell_pill,
+            self.asset_pill,
+            self.open_issue_pill,
+            self.recent_resolved_pill,
+        ):
+            metrics.addWidget(pill)
+        metrics.addStretch(1)
+        header_layout.addLayout(metrics)
+        page.addWidget(self.machine_header)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_active_section())
-        splitter.addWidget(self._build_resolved_section())
-        splitter.setSizes([680, 440])
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        self.active_list = IssueListView(
+            "active",
+            "Active/Open Issues",
+            "Search active issues...",
+            show_log_action=True,
+        )
+        self.active_list.resolve_requested.connect(self.resolve_issue_requested.emit)
+        self.active_list.log_issue_requested.connect(self._request_log_issue)
+        splitter.addWidget(self.active_list)
+
+        self.resolved_list = IssueListView(
+            "resolved",
+            "Recent Resolved",
+            "Search resolved issues...",
+        )
+        splitter.addWidget(self.resolved_list)
+        splitter.setSizes([420, 300])
         page.addWidget(splitter, 1)
-
-    def _build_active_section(self) -> QWidget:
-        section = QWidget()
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        title = QLabel("Active/Open Issues")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-
-        self.active_empty = QLabel("No active issues.")
-        self.active_empty.setObjectName("mutedLabel")
-        layout.addWidget(self.active_empty)
-
-        self.active_scroll = QScrollArea()
-        self.active_scroll.setWidgetResizable(True)
-        self.active_host = QWidget()
-        self.active_host.setObjectName("transparentHost")
-        self.active_layout = QVBoxLayout(self.active_host)
-        self.active_layout.setContentsMargins(0, 0, 0, 0)
-        self.active_layout.setSpacing(12)
-        self.active_layout.addStretch(1)
-        self.active_scroll.setWidget(self.active_host)
-        layout.addWidget(self.active_scroll, 1)
-        return section
-
-    def _build_resolved_section(self) -> QWidget:
-        section = QWidget()
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        title = QLabel("Recent Resolved")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-
-        self.resolved_empty = QLabel("No recently resolved issues.")
-        self.resolved_empty.setObjectName("mutedLabel")
-        layout.addWidget(self.resolved_empty)
-
-        self.resolved_scroll = QScrollArea()
-        self.resolved_scroll.setWidgetResizable(True)
-        self.resolved_host = QWidget()
-        self.resolved_host.setObjectName("transparentHost")
-        self.resolved_layout = QVBoxLayout(self.resolved_host)
-        self.resolved_layout.setContentsMargins(0, 0, 0, 0)
-        self.resolved_layout.setSpacing(12)
-        self.resolved_layout.addStretch(1)
-        self.resolved_scroll.setWidget(self.resolved_host)
-        layout.addWidget(self.resolved_scroll, 1)
-        return section
 
     def load_machine(self, machine_number: str) -> None:
         self.machine_number = machine_number
@@ -137,50 +116,33 @@ class MachineCellPage(HoneycombBackground):
             self.brand_header.set_title("Machine not found")
             self.brand_header.set_subtitle("")
             self.status_badge.set_status("Unknown/Error")
+            self.machine_header.setProperty("statusState", "unknown")
+            repolish(self.machine_header)
+            self.area_pill.set_value("-")
+            self.cell_pill.set_value("-")
+            self.asset_pill.set_value("-")
+            self.open_issue_pill.set_value("0")
+            self.recent_resolved_pill.set_value("0")
+            self.active_list.set_issues([])
+            self.resolved_list.set_issues([])
             return
 
         self.brand_header.set_title(f"Machine {summary.machine_number}")
-        self.brand_header.set_subtitle(f"{summary.name} | {summary.area} | {summary.cell}")
+        self.brand_header.set_subtitle(summary.name)
         self.status_badge.set_status(summary.calculated_status)
-
-        self._clear_layout(self.info_layout)
-        self.info_layout.addWidget(InfoRow("Machine", summary.machine_number))
-        self.info_layout.addWidget(InfoRow("Name", summary.name))
-        self.info_layout.addWidget(InfoRow("Area", summary.area))
-        self.info_layout.addWidget(InfoRow("Cell", summary.cell))
-        self.info_layout.addWidget(InfoRow("Asset tag", summary.asset_tag))
-        self.info_layout.addWidget(InfoRow("Status", summary.calculated_status))
-        self.info_layout.addWidget(InfoRow("Open issues", str(summary.open_issue_count)))
+        self.machine_header.setProperty("statusState", status_state(summary.calculated_status))
+        repolish(self.machine_header)
 
         active_issues = self.repository.list_active_issues(summary.machine_number)
-        self._populate_active(active_issues)
+        recent_resolved = self.repository.list_recent_resolved_issues(summary.machine_number, limit=None)
 
-        recent_resolved = self.repository.list_recent_resolved_issues(summary.machine_number)
-        self._populate_resolved(recent_resolved)
-
-    def _populate_active(self, issues) -> None:
-        self._clear_layout(self.active_layout)
-        self.active_empty.setVisible(len(issues) == 0)
-        for issue in issues:
-            card = IssueCard(issue)
-            card.resolve_requested.connect(self.resolve_issue_requested.emit)
-            self.active_layout.addWidget(card)
-        self.active_layout.addStretch(1)
-
-    def _populate_resolved(self, issues) -> None:
-        self._clear_layout(self.resolved_layout)
-        self.resolved_empty.setVisible(len(issues) == 0)
-        for issue in issues:
-            self.resolved_layout.addWidget(ResolvedIssueCard(issue))
-        self.resolved_layout.addStretch(1)
-
-    @staticmethod
-    def _clear_layout(layout) -> None:
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+        self.area_pill.set_value(summary.area)
+        self.cell_pill.set_value(summary.cell)
+        self.asset_pill.set_value(summary.asset_tag)
+        self.open_issue_pill.set_value(str(summary.open_issue_count))
+        self.recent_resolved_pill.set_value(str(len(recent_resolved)))
+        self.active_list.set_issues(active_issues)
+        self.resolved_list.set_issues(recent_resolved)
 
     def _request_log_issue(self) -> None:
         if self.machine_number:

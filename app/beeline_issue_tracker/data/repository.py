@@ -127,10 +127,9 @@ class IssueRepository:
             ).fetchone()
         return self._issue_from_row(row) if row else None
 
-    def list_recent_resolved_issues(self, machine_number: str, limit: int = 8) -> list[ResolvedIssue]:
+    def list_recent_resolved_issues(self, machine_number: str, limit: int | None = 8) -> list[ResolvedIssue]:
         with connect(self.db_path) as conn:
-            rows = conn.execute(
-                """
+            sql = """
                 SELECT
                     id,
                     original_issue_id,
@@ -149,10 +148,12 @@ class IssueRepository:
                 FROM resolved_issues_cache
                 WHERE machine_number = ?
                 ORDER BY resolved_at DESC
-                LIMIT ?
-                """,
-                (machine_number, limit),
-            ).fetchall()
+                """
+            params: list[str | int] = [machine_number]
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(max(0, int(limit)))
+            rows = conn.execute(sql, params).fetchall()
         return [self._resolved_from_row(row) for row in rows]
 
     def get_latest_resolved_issue(self) -> ResolvedIssue | None:
