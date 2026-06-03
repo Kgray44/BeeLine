@@ -45,6 +45,7 @@ GROUPED_HEADERS = (
     "Category",
     "Notes",
 )
+GROUPED_REFRESH_ROW_THRESHOLD = 500
 
 
 DARK_FILL = "1D252C"
@@ -73,6 +74,7 @@ class ArchiveWriteResult:
     sheet_name: str
     row_number: int
     created_workbook: bool
+    grouped_refresh_deferred: bool = False
 
 
 @dataclass(frozen=True)
@@ -99,13 +101,16 @@ class ExcelArchive:
         workbook = self._load_or_create_workbook()
         raw_sheet = self._get_archive_sheet(workbook)
         row_number = self._append_raw_issue_if_missing(raw_sheet, issue)
-        self._refresh_workbook(workbook)
+        record_count = _raw_record_count(raw_sheet)
+        defer_grouped = record_count > GROUPED_REFRESH_ROW_THRESHOLD
+        self._refresh_workbook(workbook, defer_grouped=defer_grouped)
         workbook.save(self.archive_path)
         return ArchiveWriteResult(
             archive_path=self.archive_path,
             sheet_name=ARCHIVE_SHEET,
             row_number=row_number,
             created_workbook=created_workbook,
+            grouped_refresh_deferred=defer_grouped,
         )
 
     def _load_or_create_workbook(self):
@@ -141,10 +146,16 @@ class ExcelArchive:
         return worksheet
 
     def _append_raw_issue_if_missing(self, worksheet, issue: ResolvedIssue) -> int:
-        for row_index in range(2, worksheet.max_row + 1):
-            existing_id = worksheet.cell(row=row_index, column=1).value
-            if existing_id is not None and int(existing_id) == issue.id:
-                return row_index
+        existing_rows: dict[int, int] = {}
+        for row_index, (existing_id,) in enumerate(
+            worksheet.iter_rows(min_row=2, min_col=1, max_col=1, values_only=True),
+            start=2,
+        ):
+            if existing_id is None:
+                continue
+            existing_rows[int(existing_id)] = row_index
+        if issue.id in existing_rows:
+            return existing_rows[issue.id]
 
         worksheet.append(
             (
@@ -165,13 +176,24 @@ class ExcelArchive:
         self._style_raw_sheet(worksheet)
         return worksheet.max_row
 
-    def _refresh_workbook(self, workbook) -> None:
+    def _refresh_workbook(self, workbook, *, defer_grouped: bool = False) -> None:
         raw_sheet = self._get_archive_sheet(workbook)
         records = _raw_records(raw_sheet)
-        self._refresh_info_sheet(self._get_info_sheet(workbook), len(records))
-        self._refresh_grouped_sheet(workbook, records)
+        self._refresh_info_sheet(
+            self._get_info_sheet(workbook),
+            len(records),
+            grouped_refresh_deferred=defer_grouped,
+        )
+        if not defer_grouped:
+            self._refresh_grouped_sheet(workbook, records)
 
-    def _refresh_info_sheet(self, worksheet, total_resolved: int) -> None:
+    def _refresh_info_sheet(
+        self,
+        worksheet,
+        total_resolved: int,
+        *,
+        grouped_refresh_deferred: bool = False,
+    ) -> None:
         _clear_sheet(worksheet)
         worksheet.title = INFO_SHEET
         worksheet.sheet_view.showGridLines = False
@@ -197,6 +219,12 @@ class ExcelArchive:
             ("Total resolved rows", total_resolved),
             ("Raw source sheet", ARCHIVE_SHEET),
             ("Readable grouped view", GROUPED_SHEET),
+            (
+                "Grouped refresh",
+                "Deferred; run python run_beeline.py --repair-archive"
+                if grouped_refresh_deferred
+                else "Current",
+            ),
             ("Archive writer", "openpyxl, no Excel COM required"),
         )
         start_row = 5
@@ -423,6 +451,7 @@ def inspect_archive(archive_path: Path) -> ArchiveInspection:
             grouped_sheet_exists=False,
         )
 
+    workbook = None
     try:
         workbook = load_workbook(archive_path, read_only=True, data_only=True)
         sheet_names = tuple(workbook.sheetnames)
@@ -467,6 +496,9 @@ def inspect_archive(archive_path: Path) -> ArchiveInspection:
             grouped_sheet_exists=False,
             error=str(exc),
         )
+    finally:
+        if workbook is not None:
+            workbook.close()
 
 
 def _raw_records(worksheet) -> list[dict[str, Any]]:
@@ -476,6 +508,14 @@ def _raw_records(worksheet) -> list[dict[str, Any]]:
             continue
         records.append(dict(zip(HEADERS, row)))
     return records
+
+
+def _raw_record_count(worksheet) -> int:
+    count = 0
+    for row in worksheet.iter_rows(min_row=2, max_col=len(HEADERS), values_only=True):
+        if any(value is not None for value in row):
+            count += 1
+    return count
 
 
 def _group_records_by_resolved_date(records: list[dict[str, Any]]):

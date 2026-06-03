@@ -59,6 +59,55 @@ class ResolvedIssue:
     archive_error: str
 
 
+@dataclass(frozen=True)
+class IssueEvent:
+    id: int
+    issue_id: int | None
+    original_issue_id: int | None
+    machine_number: str
+    event_type: str
+    actor: str
+    created_at: str
+    details_json: str
+
+
+@dataclass(frozen=True)
+class IssueAttachment:
+    id: int
+    issue_id: int | None
+    resolved_issue_id: int | None
+    machine_number: str
+    file_path: str
+    original_filename: str
+    note: str
+    created_at: str
+    created_by: str
+
+
+@dataclass(frozen=True)
+class MachineResolvedStats:
+    machine_number: str
+    total_resolved: int
+    most_common_category: str
+    most_common_title: str
+    last_resolved_title: str
+    last_resolved_at: str
+    average_time_open_seconds: int | None
+    recurring_warning: str
+
+
+@dataclass(frozen=True)
+class IssueWithMachineContext:
+    issue: Issue
+    machine: MachineSummary | None
+
+
+@dataclass(frozen=True)
+class ResolvedIssueWithMachineContext:
+    issue: ResolvedIssue
+    machine: MachineSummary | None
+
+
 def status_from_counts(line_down_count: int, non_critical_count: int, total_open: int) -> str:
     if line_down_count > 0:
         return LINE_DOWN

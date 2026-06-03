@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -165,7 +166,7 @@ class MachineCard(QFrame):
         self.setObjectName("machineCard")
         self.setProperty("statusState", status_state(machine.calculated_status))
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.setMinimumSize(230, 155)
+        self.setMinimumSize(250, 165)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -178,7 +179,15 @@ class MachineCard(QFrame):
 
         name = QLabel(machine.name)
         name.setObjectName("mutedLabel")
+        name.setWordWrap(True)
         layout.addWidget(name)
+
+        location_text = " | ".join(part for part in (machine.area, machine.cell) if part)
+        if location_text:
+            location = QLabel(location_text)
+            location.setObjectName("mutedLabel")
+            location.setWordWrap(True)
+            layout.addWidget(location)
 
         layout.addStretch(1)
 
@@ -293,7 +302,7 @@ class IssueListToolbar(QWidget):
         header.addWidget(self.count_label)
         header.addStretch(1)
         if show_log_action:
-            self.log_button = PrimaryActionButton("+ Log Issue")
+            self.log_button = PrimaryActionButton("Report Problem")
             self.log_button.setObjectName("sectionPrimaryButton")
             self.log_button.clicked.connect(self.log_issue_requested.emit)
             header.addWidget(self.log_button)
@@ -307,17 +316,27 @@ class IssueListToolbar(QWidget):
         self.sort.currentIndexChanged.connect(self.controls_changed.emit)
         self.latest = LatestCountDropdown(10)
         self.latest.currentIndexChanged.connect(self.controls_changed.emit)
+        self.display_mode = QComboBox()
+        self.display_mode.setObjectName("compactDropdown")
+        self.display_mode.addItem("Table", "table")
+        self.display_mode.addItem("Kiosk", "kiosk")
+        self.display_mode.setMinimumHeight(38)
+        self.display_mode.currentIndexChanged.connect(self.controls_changed.emit)
 
         sort_label = QLabel("Sort")
         sort_label.setObjectName("controlLabel")
         show_label = QLabel("Show")
         show_label.setObjectName("controlLabel")
+        mode_label = QLabel("Mode")
+        mode_label.setObjectName("controlLabel")
 
         controls.addWidget(self.search, 1)
         controls.addWidget(sort_label)
         controls.addWidget(self.sort)
         controls.addWidget(show_label)
         controls.addWidget(self.latest)
+        controls.addWidget(mode_label)
+        controls.addWidget(self.display_mode)
         layout.addLayout(controls)
 
     def update_count(self, shown: int, matched: int, total: int) -> None:
@@ -333,6 +352,9 @@ class IssueListToolbar(QWidget):
 class IssueListView(QFrame):
     resolve_requested = Signal(int)
     log_issue_requested = Signal()
+    detail_requested = Signal(int, str)
+    open_requested = Signal(str, int)
+    criteria_changed = Signal()
 
     ACTIVE_COLUMNS = (
         "Issue Title",
@@ -342,7 +364,7 @@ class IssueListView(QFrame):
         "Created",
         "Age",
         "Category",
-        "Action",
+        "Actions",
     )
     RESOLVED_COLUMNS = (
         "Issue Title",
@@ -354,6 +376,7 @@ class IssueListView(QFrame):
         "Resolved",
         "Time Open",
         "Category",
+        "Action",
     )
 
     def __init__(self, mode: str, title: str, search_placeholder: str, *, show_log_action: bool = False, parent=None):
@@ -361,6 +384,7 @@ class IssueListView(QFrame):
         self.mode = mode
         self.include_resolved_fields = mode == "resolved"
         self._issues: list[Issue | ResolvedIssue] = []
+        self._visible_table_issues: list[Issue | ResolvedIssue] = []
         self.setObjectName("listPanel")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -373,7 +397,7 @@ class IssueListView(QFrame):
             search_placeholder,
             show_log_action=show_log_action,
         )
-        self.toolbar.controls_changed.connect(self._refresh_table)
+        self.toolbar.controls_changed.connect(self._handle_controls_changed)
         self.toolbar.log_issue_requested.connect(self.log_issue_requested.emit)
         layout.addWidget(self.toolbar)
 
@@ -395,13 +419,38 @@ class IssueListView(QFrame):
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setHighlightSections(False)
+        self.table.itemDoubleClicked.connect(self._open_table_item)
+        self.table.itemActivated.connect(self._open_table_item)
         layout.addWidget(self.table, 1)
+
+        self.card_scroll = QScrollArea()
+        self.card_scroll.setWidgetResizable(True)
+        self.card_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.card_host = QWidget()
+        self.card_host.setObjectName("transparentHost")
+        self.card_layout = QVBoxLayout(self.card_host)
+        self.card_layout.setContentsMargins(0, 0, 0, 0)
+        self.card_layout.setSpacing(10)
+        self.card_scroll.setWidget(self.card_host)
+        layout.addWidget(self.card_scroll, 1)
+        self.card_scroll.hide()
 
         self._configure_columns()
 
     def set_issues(self, issues: list[Issue | ResolvedIssue]) -> None:
         self._issues = list(issues)
-        self._refresh_table()
+        self._refresh_view()
+
+    def criteria(self) -> tuple[str, str, int | None]:
+        return (
+            self.toolbar.search.text(),
+            self.toolbar.sort.currentData() or DATE_DESC,
+            self.toolbar.latest.currentData(),
+        )
+
+    def _handle_controls_changed(self) -> None:
+        self.criteria_changed.emit()
+        self._refresh_view()
 
     def _configure_columns(self) -> None:
         columns = self.RESOLVED_COLUMNS if self.include_resolved_fields else self.ACTIVE_COLUMNS
@@ -417,10 +466,10 @@ class IssueListView(QFrame):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
 
         if self.include_resolved_fields:
-            widths = (170, 142, 230, 230, 120, 120, 150, 94, 110)
+            widths = (170, 142, 220, 220, 110, 110, 142, 92, 100, 94)
             stretch_columns = (2, 3)
         else:
-            widths = (190, 118, 270, 120, 150, 82, 110, 108)
+            widths = (190, 118, 260, 112, 142, 78, 100, 154)
             stretch_columns = (2,)
 
         for column, width in enumerate(widths):
@@ -428,10 +477,8 @@ class IssueListView(QFrame):
         for column in stretch_columns:
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
 
-    def _refresh_table(self) -> None:
-        query = self.toolbar.search.text()
-        sort_key = self.toolbar.sort.currentData() or DATE_DESC
-        latest_limit = self.toolbar.latest.currentData()
+    def _refresh_view(self) -> None:
+        query, sort_key, latest_limit = self.criteria()
 
         matched = filter_issues(
             self._issues,
@@ -447,13 +494,27 @@ class IssueListView(QFrame):
         )
 
         self.toolbar.update_count(len(visible), len(matched), len(self._issues))
+        self._clear_cards()
         self.table.setRowCount(0)
+        self._visible_table_issues = []
         self.empty_label.setVisible(len(visible) == 0)
-        self.table.setVisible(len(visible) > 0)
+        self.table.setVisible(False)
+        self.card_scroll.setVisible(False)
         if len(visible) == 0:
             self.empty_label.setText(self._empty_text(has_query=bool(query.strip())))
             return
 
+        if self.toolbar.display_mode.currentData() == "kiosk":
+            self._populate_cards(visible)
+            self.card_scroll.setVisible(True)
+            return
+
+        self.table.setVisible(True)
+        self._populate_table(visible)
+
+    def _populate_table(self, visible: list[Issue | ResolvedIssue]) -> None:
+        self.table.setRowCount(0)
+        self._visible_table_issues = visible
         self.table.setRowCount(len(visible))
         for row, issue in enumerate(visible):
             if self.include_resolved_fields and isinstance(issue, ResolvedIssue):
@@ -462,6 +523,20 @@ class IssueListView(QFrame):
                 self._populate_active_row(row, issue)
             self.table.setRowHeight(row, 54)
         self.table.clearSelection()
+
+    def _populate_cards(self, visible: list[Issue | ResolvedIssue]) -> None:
+        for issue in visible:
+            if isinstance(issue, ResolvedIssue):
+                card = ResolvedIssueCard(issue)
+                card.detail_requested.connect(lambda issue_id=issue.id: self._emit_open("resolved", issue_id))
+            elif isinstance(issue, Issue):
+                card = IssueCard(issue)
+                card.resolve_requested.connect(self.resolve_requested.emit)
+                card.detail_requested.connect(lambda issue_id=issue.id: self._emit_open("active", issue_id))
+            else:
+                continue
+            self.card_layout.addWidget(card)
+        self.card_layout.addStretch(1)
 
     def _populate_active_row(self, row: int, issue: Issue) -> None:
         self.table.setItem(row, 0, self._item(preview_text(issue.title, 64), issue.title))
@@ -472,10 +547,13 @@ class IssueListView(QFrame):
         self.table.setItem(row, 5, self._item(format_duration_between(issue.created_at)))
         self.table.setItem(row, 6, self._item(issue.category or "-"))
 
+        view_button = QPushButton("Open")
+        view_button.setObjectName("tableActionButton")
+        view_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self._emit_open("active", issue_id))
         resolve_button = QPushButton("Resolve")
         resolve_button.setObjectName("tableActionButton")
         resolve_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self.resolve_requested.emit(issue_id))
-        self.table.setCellWidget(row, 7, self._centered_widget(resolve_button))
+        self.table.setCellWidget(row, 7, self._action_widget(view_button, resolve_button))
 
     def _populate_resolved_row(self, row: int, issue: ResolvedIssue) -> None:
         self.table.setItem(row, 0, self._item(preview_text(issue.title, 58), issue.title))
@@ -487,6 +565,24 @@ class IssueListView(QFrame):
         self.table.setItem(row, 6, self._item(format_timestamp(issue.resolved_at), issue.resolved_at))
         self.table.setItem(row, 7, self._item(format_duration_between(issue.created_at, issue.resolved_at)))
         self.table.setItem(row, 8, self._item(issue.category or "-"))
+        view_button = QPushButton("Open")
+        view_button.setObjectName("tableActionButton")
+        view_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self._emit_open("resolved", issue_id))
+        self.table.setCellWidget(row, 9, self._centered_widget(view_button))
+
+    def _open_table_item(self, item: QTableWidgetItem) -> None:
+        row = item.row()
+        if row < 0 or row >= len(self._visible_table_issues):
+            return
+        issue = self._visible_table_issues[row]
+        if isinstance(issue, ResolvedIssue):
+            self._emit_open("resolved", issue.id)
+        else:
+            self._emit_open("active", issue.id)
+
+    def _emit_open(self, mode: str, issue_id: int) -> None:
+        self.open_requested.emit(mode, issue_id)
+        self.detail_requested.emit(issue_id, mode)
 
     def _empty_text(self, *, has_query: bool) -> str:
         if has_query:
@@ -515,9 +611,30 @@ class IssueListView(QFrame):
         layout.addStretch(1)
         return host
 
+    @staticmethod
+    def _action_widget(*widgets: QWidget) -> QWidget:
+        host = QWidget()
+        host.setObjectName("transparentHost")
+        layout = QHBoxLayout(host)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(5)
+        layout.addStretch(1)
+        for widget in widgets:
+            layout.addWidget(widget)
+        layout.addStretch(1)
+        return host
+
+    def _clear_cards(self) -> None:
+        while self.card_layout.count():
+            item = self.card_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
 
 class IssueCard(QFrame):
     resolve_requested = Signal(int)
+    detail_requested = Signal(int)
 
     def __init__(self, issue: Issue, parent=None):
         super().__init__(parent)
@@ -551,16 +668,23 @@ class IssueCard(QFrame):
 
         actions = QHBoxLayout()
         actions.addStretch(1)
+        detail_button = QPushButton("View Details")
+        detail_button.setObjectName("tableActionButton")
+        detail_button.clicked.connect(lambda: self.detail_requested.emit(issue.id))
         resolve_button = QPushButton("Resolve Issue")
         resolve_button.setObjectName("resolveButton")
         resolve_button.clicked.connect(lambda: self.resolve_requested.emit(issue.id))
+        actions.addWidget(detail_button)
         actions.addWidget(resolve_button)
         layout.addLayout(actions)
 
 
 class ResolvedIssueCard(QFrame):
+    detail_requested = Signal(int)
+
     def __init__(self, issue: ResolvedIssue, parent=None):
         super().__init__(parent)
+        self.issue = issue
         self.setObjectName("issueCard")
         self.setProperty("archiveState", "resolved")
 
@@ -587,3 +711,11 @@ class ResolvedIssueCard(QFrame):
         meta.setObjectName("mutedLabel")
         meta.setWordWrap(True)
         layout.addWidget(meta)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        detail_button = QPushButton("View Details")
+        detail_button.setObjectName("tableActionButton")
+        detail_button.clicked.connect(lambda: self.detail_requested.emit(issue.id))
+        actions.addWidget(detail_button)
+        layout.addLayout(actions)

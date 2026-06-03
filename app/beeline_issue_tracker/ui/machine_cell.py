@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -27,6 +28,7 @@ class MachineCellPage(HoneycombBackground):
     back_requested = Signal()
     log_issue_requested = Signal(str)
     resolve_issue_requested = Signal(int)
+    issue_detail_requested = Signal(int, str)
 
     def __init__(self, repository: IssueRepository, theme_manager: ThemeManager, paths: AppPaths, parent=None):
         super().__init__(theme_manager, parent)
@@ -59,7 +61,7 @@ class MachineCellPage(HoneycombBackground):
         title_row.addWidget(self.brand_header, 1)
         self.status_badge = StatusBadge("Unknown/Error")
         title_row.addWidget(self.status_badge)
-        self.log_button = PrimaryActionButton("+ Log Issue")
+        self.log_button = PrimaryActionButton("Report Problem")
         self.log_button.clicked.connect(self._request_log_issue)
         title_row.addWidget(self.log_button)
         header_layout.addLayout(title_row)
@@ -83,6 +85,20 @@ class MachineCellPage(HoneycombBackground):
         header_layout.addLayout(metrics)
         page.addWidget(self.machine_header)
 
+        self.memory_panel = QFrame()
+        self.memory_panel.setObjectName("infoPanel")
+        memory_layout = QVBoxLayout(self.memory_panel)
+        memory_layout.setContentsMargins(16, 12, 16, 12)
+        memory_layout.setSpacing(6)
+        memory_title = QLabel("Troubleshooting Memory")
+        memory_title.setObjectName("sectionTitle")
+        self.memory_summary = QLabel()
+        self.memory_summary.setObjectName("mutedLabel")
+        self.memory_summary.setWordWrap(True)
+        memory_layout.addWidget(memory_title)
+        memory_layout.addWidget(self.memory_summary)
+        page.addWidget(self.memory_panel)
+
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.active_list = IssueListView(
             "active",
@@ -92,6 +108,8 @@ class MachineCellPage(HoneycombBackground):
         )
         self.active_list.resolve_requested.connect(self.resolve_issue_requested.emit)
         self.active_list.log_issue_requested.connect(self._request_log_issue)
+        self.active_list.detail_requested.connect(self.issue_detail_requested.emit)
+        self.active_list.criteria_changed.connect(self.refresh)
         splitter.addWidget(self.active_list)
 
         self.resolved_list = IssueListView(
@@ -99,6 +117,8 @@ class MachineCellPage(HoneycombBackground):
             "Recent Resolved",
             "Search resolved issues...",
         )
+        self.resolved_list.detail_requested.connect(self.issue_detail_requested.emit)
+        self.resolved_list.criteria_changed.connect(self.refresh)
         splitter.addWidget(self.resolved_list)
         splitter.setSizes([420, 300])
         page.addWidget(splitter, 1)
@@ -123,6 +143,7 @@ class MachineCellPage(HoneycombBackground):
             self.asset_pill.set_value("-")
             self.open_issue_pill.set_value("0")
             self.recent_resolved_pill.set_value("0")
+            self.memory_summary.setText("No resolved history yet.")
             self.active_list.set_issues([])
             self.resolved_list.set_issues([])
             return
@@ -133,17 +154,59 @@ class MachineCellPage(HoneycombBackground):
         self.machine_header.setProperty("statusState", status_state(summary.calculated_status))
         repolish(self.machine_header)
 
-        active_issues = self.repository.list_active_issues(summary.machine_number)
-        recent_resolved = self.repository.list_recent_resolved_issues(summary.machine_number, limit=None)
+        active_query, active_sort, active_limit = self.active_list.criteria()
+        resolved_query, resolved_sort, resolved_limit = self.resolved_list.criteria()
+        active_issues = self.repository.list_active_issues(
+            summary.machine_number,
+            query=active_query,
+            sort_key=active_sort,
+            limit=active_limit,
+        )
+        recent_resolved = self.repository.list_resolved_issues(
+            summary.machine_number,
+            query=resolved_query,
+            sort_key=resolved_sort,
+            limit=resolved_limit,
+        )
+        stats = self.repository.get_machine_resolved_stats(summary.machine_number)
 
         self.area_pill.set_value(summary.area)
         self.cell_pill.set_value(summary.cell)
         self.asset_pill.set_value(summary.asset_tag)
         self.open_issue_pill.set_value(str(summary.open_issue_count))
-        self.recent_resolved_pill.set_value(str(len(recent_resolved)))
+        self.recent_resolved_pill.set_value(str(stats.total_resolved))
+        self.memory_summary.setText(_memory_text(stats))
         self.active_list.set_issues(active_issues)
         self.resolved_list.set_issues(recent_resolved)
 
     def _request_log_issue(self) -> None:
         if self.machine_number:
             self.log_issue_requested.emit(self.machine_number)
+
+
+def _memory_text(stats) -> str:
+    if stats.total_resolved == 0:
+        return "No resolved history yet."
+    avg = _format_seconds(stats.average_time_open_seconds)
+    last_fix = stats.last_resolved_title or "-"
+    parts = [
+        f"Resolved: {stats.total_resolved}",
+        f"Most common category: {stats.most_common_category or '-'}",
+        f"Average time open: {avg}",
+        f"Recurring: {stats.recurring_warning or 'None'}",
+        f"Last fix: {last_fix}",
+    ]
+    return " | ".join(parts)
+
+
+def _format_seconds(seconds: int | None) -> str:
+    if seconds is None:
+        return "-"
+    minutes = seconds // 60
+    hours = minutes // 60
+    days = hours // 24
+    if days:
+        return f"{days}d {hours % 24}h"
+    if hours:
+        return f"{hours}h {minutes % 60}m"
+    return f"{minutes}m"

@@ -38,7 +38,7 @@ class LogIssuePage(HoneycombBackground):
         page.setSpacing(18)
 
         header = QHBoxLayout()
-        self.brand_header = BrandHeader("Log Issue", "", paths.logo_path())
+        self.brand_header = BrandHeader("Report Problem", "", paths.logo_path())
         header.addWidget(self.brand_header, 1)
         header.addWidget(ThemeToggleButton(theme_manager))
         page.addLayout(header)

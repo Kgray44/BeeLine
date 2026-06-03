@@ -52,6 +52,38 @@ CREATE TABLE IF NOT EXISTS resolved_issues_cache (
 
 CREATE INDEX IF NOT EXISTS idx_resolved_machine_recent
     ON resolved_issues_cache(machine_number, resolved_at DESC);
+
+CREATE TABLE IF NOT EXISTS issue_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER,
+    original_issue_id INTEGER,
+    machine_number TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_events_machine_recent
+    ON issue_events(machine_number, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_issue_events_issue
+    ON issue_events(original_issue_id, issue_id);
+
+CREATE TABLE IF NOT EXISTS issue_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER,
+    resolved_issue_id INTEGER,
+    machine_number TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    original_filename TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue
+    ON issue_attachments(issue_id, resolved_issue_id);
 """
 
 

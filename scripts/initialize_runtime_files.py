@@ -23,6 +23,20 @@ CONFIG_TEMPLATE = {
         "Create local plant machine configuration in config/beeline_config.json.",
         "Never commit real machine data, employee names, badge IDs, issue history, or secrets.",
     ],
+    "roles": {
+        "operator": {
+            "enabled": False,
+            "pin_hash": "",
+        },
+        "technician": {
+            "enabled": False,
+            "pin_hash": "",
+        },
+        "admin": {
+            "enabled": False,
+            "pin_hash": "",
+        },
+    },
     "machines": [],
 }
 
