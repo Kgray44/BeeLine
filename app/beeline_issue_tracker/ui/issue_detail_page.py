@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from beeline_issue_tracker.config import AppPaths
+from beeline_issue_tracker.analytics.models import FixSuggestion, RecurringIssuePattern, RelatedIssueMatch
 from beeline_issue_tracker.domain import (
     IssueAttachment,
     IssueWithMachineContext,
@@ -89,6 +90,8 @@ class IssueDetailPage(HoneycombBackground):
         context: IssueWithMachineContext,
         *,
         related_issues: list[ResolvedIssue] | None = None,
+        related_matches: list[RelatedIssueMatch] | None = None,
+        fix_suggestions: list[FixSuggestion] | None = None,
         trend_summary: dict[str, int] | None = None,
         attachments: list[IssueAttachment] | None = None,
     ) -> None:
@@ -118,7 +121,13 @@ class IssueDetailPage(HoneycombBackground):
                 ("Issue ID", str(issue.id)),
             ),
         )
-        self._add_future_sections(related_issues or [], trend_summary or {}, attachments or [])
+        self._add_future_sections(
+            related_issues or [],
+            trend_summary or {},
+            attachments or [],
+            related_matches=related_matches or [],
+            fix_suggestions=fix_suggestions or [],
+        )
         self.content_layout.addStretch(1)
 
     def load_resolved(
@@ -127,6 +136,8 @@ class IssueDetailPage(HoneycombBackground):
         *,
         trend_summary: dict[str, int] | None = None,
         attachments: list[IssueAttachment] | None = None,
+        related_matches: list[RelatedIssueMatch] | None = None,
+        recurring_patterns: list[RecurringIssuePattern] | None = None,
     ) -> None:
         issue = context.issue
         self._machine_number = issue.machine_number
@@ -162,7 +173,13 @@ class IssueDetailPage(HoneycombBackground):
                 ("Archive status", archive_status),
             ),
         )
-        self._add_future_sections([], trend_summary or {}, attachments or [])
+        self._add_future_sections(
+            [],
+            trend_summary or {},
+            attachments or [],
+            related_matches=related_matches or [],
+            recurring_patterns=recurring_patterns or [],
+        )
         self.content_layout.addStretch(1)
 
     def _set_header(self, title: str, status: str, subtitle: str) -> None:
@@ -214,9 +231,14 @@ class IssueDetailPage(HoneycombBackground):
         related_issues: list[ResolvedIssue],
         trend_summary: dict[str, int],
         attachments: list[IssueAttachment],
+        *,
+        related_matches: list[RelatedIssueMatch] | None = None,
+        fix_suggestions: list[FixSuggestion] | None = None,
+        recurring_patterns: list[RecurringIssuePattern] | None = None,
     ) -> None:
-        self._add_related_panel(related_issues)
-        self._add_text_panel("Suggested Fixes", "Fix suggestions are planned for a future version.")
+        self._add_related_panel(related_matches or related_issues)
+        self._add_fix_suggestions_panel(fix_suggestions or [])
+        self._add_recurring_patterns_panel(recurring_patterns or [])
         if trend_summary:
             trend_text = (
                 f"Active: {trend_summary.get('active', 0)} | "
@@ -232,7 +254,42 @@ class IssueDetailPage(HoneycombBackground):
             )
         self._add_text_panel("Attachments", attachment_text)
 
-    def _add_related_panel(self, related_issues: list[ResolvedIssue]) -> None:
+    def _add_recurring_patterns_panel(self, patterns: list[RecurringIssuePattern]) -> None:
+        if not patterns:
+            return
+        text = "\n".join(
+            f"{pattern.display_label}: {pattern.risk_note}"
+            for pattern in patterns[:5]
+        )
+        self._add_text_panel("Similar Recurring Patterns", text)
+
+    def _add_fix_suggestions_panel(self, suggestions: list[FixSuggestion]) -> None:
+        panel = QFrame()
+        panel.setObjectName("infoPanel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(8)
+        title = QLabel("Suggested Fixes")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        if not suggestions:
+            placeholder = QLabel("No related resolved history with solution text is available yet.")
+            placeholder.setObjectName("mutedLabel")
+            placeholder.setWordWrap(True)
+            layout.addWidget(placeholder)
+        else:
+            for suggestion in suggestions:
+                body = QLabel(
+                    f"{suggestion.title} | Confidence: {suggestion.confidence} | "
+                    f"Based on {suggestion.based_on_count} resolved issue(s)\n"
+                    f"{suggestion.suggestion}\n{suggestion.caution}"
+                )
+                body.setWordWrap(True)
+                body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                layout.addWidget(body)
+        self.content_layout.addWidget(panel)
+
+    def _add_related_panel(self, related_issues: list[ResolvedIssue] | list[RelatedIssueMatch]) -> None:
         panel = QFrame()
         panel.setObjectName("infoPanel")
         layout = QVBoxLayout(panel)
@@ -249,13 +306,23 @@ class IssueDetailPage(HoneycombBackground):
         else:
             for issue in related_issues:
                 row = QHBoxLayout()
-                label = QLabel(f"{preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at)}")
+                if isinstance(issue, RelatedIssueMatch):
+                    reasons = " | ".join(issue.match_reasons)
+                    label_text = (
+                        f"{preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at or '')} | "
+                        f"Match {issue.match_score}: {reasons}"
+                    )
+                    issue_id = issue.issue_id
+                else:
+                    label_text = f"{preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at)}"
+                    issue_id = issue.id
+                label = QLabel(label_text)
                 label.setWordWrap(True)
                 row.addWidget(label, 1)
                 button = QPushButton("Open")
                 button.setObjectName("tableActionButton")
                 button.clicked.connect(
-                    lambda _checked=False, issue_id=issue.id: self.related_issue_requested.emit("resolved", issue_id)
+                    lambda _checked=False, resolved_issue_id=issue_id: self.related_issue_requested.emit("resolved", resolved_issue_id)
                 )
                 row.addWidget(button)
                 layout.addLayout(row)
@@ -298,4 +365,3 @@ def _clear_layout(layout) -> None:
         child_layout = item.layout()
         if child_layout:
             _clear_layout(child_layout)
-

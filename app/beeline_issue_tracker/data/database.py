@@ -84,6 +84,27 @@ CREATE TABLE IF NOT EXISTS issue_attachments (
 
 CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue
     ON issue_attachments(issue_id, resolved_issue_id);
+
+CREATE TABLE IF NOT EXISTS predictive_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_number TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    risk_score INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    reasons_json TEXT NOT NULL DEFAULT '[]',
+    suggested_action TEXT NOT NULL DEFAULT '',
+    alert_type TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL DEFAULT '',
+    dismissed_by TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_predictive_alerts_dedupe
+    ON predictive_alerts(machine_number, alert_type, title, risk_level);
+
+CREATE INDEX IF NOT EXISTS idx_predictive_alerts_machine_recent
+    ON predictive_alerts(machine_number, created_at DESC);
 """
 
 

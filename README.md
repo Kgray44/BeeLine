@@ -4,6 +4,8 @@ BeeLine is a plant-floor kiosk issue tracker MVP with a Hive Dashboard, Machine 
 
 This repository is prepared for GitHub with application code and safe, empty template files only. Real plant runtime data belongs in ignored local folders.
 
+BeeLine now includes a local-only predictive maintenance layer. It analyzes the local SQLite issue history with deterministic heuristics for risk scores, recurring patterns, related resolved issues, fix suggestions, charts, and plain-text summaries. It does not send machine data, issue history, operator names, archive data, attachments, or predictive outputs to OpenAI, cloud AI, external analytics APIs, webhooks, or telemetry.
+
 ## Run BeeLine
 
 ```powershell
@@ -52,6 +54,7 @@ Do not commit:
 - real Excel archive data
 - screenshots, captures, photos, exports, logs, backups, or local attachments
 - secrets, credentials, tokens, private links, `.env` files, or approved/private branding assets
+- generated predictive maintenance summaries, reports, alert data, or screenshots of real predictive dashboards
 
 ## Roles and PINs
 
@@ -77,9 +80,13 @@ The Hive Dashboard supports machine search, Plant Layout/Severity/Open Issues/Ma
 
 Use `View All Open Issues` to open the global Open Issues page. That page shows active issues across all machines with search, severity, machine, area/cell, sort, and latest filters.
 
-Machine Cell pages include `Report Problem`, active and resolved issue lists, table/kiosk list modes, and a Troubleshooting Memory panel. Issue rows can be opened with the `Open` button, double-click, or Enter on the selected row.
+Use `Predictive Maintenance` to open the global predictive maintenance page. It ranks machines by explainable local risk score, shows active predictive alerts, recurring patterns, a global trend chart, and category breakdown. Summaries can be copied or exported locally to the ignored `exports/` folder.
 
-Issue details open as a full page inside BeeLine, not a small modal. The detail page supports active and resolved issues, Back, Go to Machine, metadata, attachments, related-issue/future suggestion sections, and Resolve Issue for active issues. Resolving from the detail page navigates to the resolved issue detail page while the Excel archive worker runs.
+Machine Cell pages include `Report Problem`, active and resolved issue lists, table/kiosk list modes, a Troubleshooting Memory panel, and a compact Maintenance Intelligence panel. Issue rows can be opened with the `Open` button, double-click, or Enter on the selected row.
+
+Issue details open as a full page inside BeeLine, not a small modal. The detail page supports active and resolved issues, Back, Go to Machine, metadata, attachments, related resolved issues, local fix suggestions based only on past resolved BeeLine records, and Resolve Issue for active issues. Resolving from the detail page navigates to the resolved issue detail page while the Excel archive worker runs.
+
+See [`docs/PREDICTIVE_MAINTENANCE.md`](docs/PREDICTIVE_MAINTENANCE.md) for risk scoring, confidence levels, recurrence rules, alert dismissal behavior, chart interpretation, and predictive privacy requirements.
 
 ## Archive Behavior
 

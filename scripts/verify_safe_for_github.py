@@ -76,6 +76,10 @@ PLANT_EXPORT_RE = re.compile(
     r"\b(?:real[-_\s]+)?(?:plant|machine)[-_\s]*(?:export|extract|dump)s?\b",
     re.IGNORECASE,
 )
+PREDICTIVE_REPORT_RE = re.compile(
+    r"(^|[/\\])(?:predictive|machine_predictive).*(?:summary|report).*\.txt$",
+    re.IGNORECASE,
+)
 REAL_DATA_RE = re.compile(
     r"\breal\s+(?:machine|plant|employee|operator)\s+data\b",
     re.IGNORECASE,
@@ -153,6 +157,8 @@ def _check_existing_sensitive_files(files: set[str], failures: list[str]) -> Non
             failures.append(f"Sensitive data-like file exists outside ignored runtime/template folders: {rel}")
         if suffix in {".log", ".zip", ".bak"} and not _is_allowed_runtime_path(rel):
             failures.append(f"Log or backup file exists outside ignored runtime folders: {rel}")
+        if PREDICTIVE_REPORT_RE.search(rel) and not _is_allowed_runtime_path(rel):
+            failures.append(f"Generated predictive report exists outside ignored runtime folders: {rel}")
         if SECRET_NAME_RE.search(rel) and rel not in ALLOWED_TEMPLATES:
             failures.append(f"Secret-like file is present: {rel}")
 
@@ -169,6 +175,8 @@ def _check_git_sensitive_files(files: set[str], failures: list[str]) -> None:
             failures.append(f"Runtime file is tracked or staged and must not be committed: {rel}")
         if suffix in {".sqlite", ".sqlite3", ".db", ".xlsx", ".xlsm", ".xls", ".log", ".zip", ".bak"}:
             failures.append(f"Sensitive file type is tracked or staged: {rel}")
+        if PREDICTIVE_REPORT_RE.search(rel):
+            failures.append(f"Generated predictive report is tracked or staged: {rel}")
         if suffix in IMAGE_SUFFIXES:
             failures.append(f"Image/media file is tracked or staged outside the placeholder whitelist: {rel}")
         if SECRET_NAME_RE.search(rel):
@@ -242,12 +250,24 @@ def _check_templates(failures: list[str]) -> None:
         try:
             conn = sqlite3.connect(sqlite_template)
             try:
+                expected_tables = (
+                    "machines",
+                    "active_issues",
+                    "resolved_issues_cache",
+                    "issue_events",
+                    "issue_attachments",
+                    "predictive_alerts",
+                )
+                existing_tables = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    ).fetchall()
+                }
                 table_counts = {
-                    "machines": conn.execute("SELECT COUNT(*) FROM machines").fetchone()[0],
-                    "active_issues": conn.execute("SELECT COUNT(*) FROM active_issues").fetchone()[0],
-                    "resolved_issues_cache": conn.execute("SELECT COUNT(*) FROM resolved_issues_cache").fetchone()[0],
-                    "issue_events": conn.execute("SELECT COUNT(*) FROM issue_events").fetchone()[0],
-                    "issue_attachments": conn.execute("SELECT COUNT(*) FROM issue_attachments").fetchone()[0],
+                    table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    for table in expected_tables
+                    if table in existing_tables
                 }
             finally:
                 conn.close()

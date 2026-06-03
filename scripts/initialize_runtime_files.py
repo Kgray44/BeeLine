@@ -37,6 +37,17 @@ CONFIG_TEMPLATE = {
             "pin_hash": "",
         },
     },
+    "analytics": {
+        "enabled": True,
+        "risk_window_days": 30,
+        "recurrence_window_days": 60,
+        "high_risk_threshold": 65,
+        "critical_risk_threshold": 85,
+        "grouped_chart_periods": 8,
+        "persist_predictive_alerts": True,
+        "enable_fix_suggestions": True,
+        "enable_related_issues": True,
+    },
     "machines": [],
 }
 
