@@ -50,9 +50,6 @@ exports/
 predictive_summary_*.txt
 predictive_report_*.txt
 
-# Do not commit approved/private brand assets without explicit approval.
-assets/branding/nolato_logo.png
-
 # Local media, design notes, and generated exports are NDA-sensitive unless reviewed.
 *.png
 *.jpg
@@ -68,3 +65,4 @@ assets/branding/nolato_logo.png
 ~$*
 
 !assets/branding/nolato_logo_placeholder.png
+!assets/branding/nolato_logo.png

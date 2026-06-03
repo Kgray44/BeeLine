@@ -55,7 +55,9 @@ class UiThemeApplicationTest(unittest.TestCase):
                 db_path=root / "beeline.sqlite3",
                 archive_path=root / ".archive" / "beeline_resolved_archive.xlsx",
                 approved_logo_path=root / "assets" / "branding" / "nolato_logo.png",
+                approved_logo_jpg_path=root / "assets" / "branding" / "nolato_logo.jpg",
                 placeholder_logo_path=root / "assets" / "branding" / "nolato_logo_placeholder.png",
+                placeholder_logo_jpg_path=root / "assets" / "branding" / "nolato_logo_placeholder.jpg",
             )
             paths.ensure_directories()
             initialize_database(paths.db_path, DEMO_MACHINES)
@@ -85,6 +87,34 @@ class UiThemeApplicationTest(unittest.TestCase):
             settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
             theme_manager = ThemeManager(settings)
             window = MainWindow(repository, paths, theme_manager)
+            window.show()
+            self.app.processEvents()
+            self.assertTrue(window.machine_cell.active_list.toolbar.log_button.isEnabled())
+            window.current_role = "technician"
+            window._apply_role_ui()
+            self.assertTrue(window.machine_cell.active_list.toolbar.log_button.isEnabled())
+            window.show_machine(machine_number)
+            self.app.processEvents()
+            log_button = window.machine_cell.active_list.toolbar.log_button
+            self.assertIsNotNone(log_button)
+            assert log_button is not None
+            self.assertTrue(log_button.isVisibleTo(window))
+            self.assertTrue(log_button.isEnabled())
+            self.assertIn(log_button, _widget_chain(window.childAt(log_button.mapTo(window, log_button.rect().center()))))
+            log_button.click()
+            self.app.processEvents()
+            self.assertIs(window.stack.currentWidget(), window.log_issue_page)
+
+            window.show_machine_details(machine_number, "history")
+            self.app.processEvents()
+            details_log_button = window.machine_details_page.active_history_list.toolbar.log_button
+            self.assertIsNotNone(details_log_button)
+            assert details_log_button is not None
+            self.assertTrue(details_log_button.isVisibleTo(window))
+            self.assertTrue(details_log_button.isEnabled())
+            details_log_button.click()
+            self.app.processEvents()
+            self.assertIs(window.stack.currentWidget(), window.log_issue_page)
 
             for theme_name in (DARK_THEME, LIGHT_THEME):
                 theme_manager.set_theme(theme_name)
@@ -92,11 +122,27 @@ class UiThemeApplicationTest(unittest.TestCase):
                 window.show_dashboard()
                 window.show_open_issues()
                 window.show_machine(machine_number)
+                window.show_machine_details(machine_number, "predictive")
                 window.show_active_issue_detail(active_issue.id, return_context="machine")
                 window.show_resolved_issue_detail(resolved_issue.id, return_context="machine")
                 window.show_log_issue(machine_number)
+                self.assertEqual("Automation", window.log_issue_page.category.itemText(0))
+                self.assertEqual("Machine", window.log_issue_page.category.itemText(1))
+                self.assertEqual("Maintenance", window.log_issue_page.category.itemText(2))
+
+            window.current_role = "admin"
+            window._apply_role_ui()
+            window.show_settings()
 
             window.close()
+
+
+def _widget_chain(widget):
+    widgets = []
+    while widget is not None:
+        widgets.append(widget)
+        widget = widget.parentWidget()
+    return widgets
 
 
 if __name__ == "__main__":

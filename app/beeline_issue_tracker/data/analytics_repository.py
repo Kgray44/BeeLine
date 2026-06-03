@@ -85,6 +85,7 @@ class AnalyticsRepository:
             sql = """
                 SELECT
                     id,
+                    issue_id AS public_issue_id,
                     original_issue_id,
                     machine_number,
                     logged_by,
@@ -445,4 +446,3 @@ def _coerce_now(now: datetime) -> datetime:
     if now.tzinfo is None:
         return now.replace(tzinfo=timezone.utc)
     return now.astimezone(timezone.utc)
-

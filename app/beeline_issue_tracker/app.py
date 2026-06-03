@@ -10,6 +10,7 @@ from beeline_issue_tracker.config import APP_NAME, AppPaths, initialize_runtime_
 from beeline_issue_tracker.data.archive import inspect_archive, refresh_archive_workbook
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
+from beeline_issue_tracker.domain import display_issue_id
 from beeline_issue_tracker.ui.main_window import MainWindow
 from beeline_issue_tracker.ui.theme import ThemeManager
 
@@ -72,11 +73,38 @@ def print_archive_status(paths: AppPaths, repository: IssueRepository) -> None:
     else:
         print(
             "Latest SQLite resolved issue: "
-            f"id={latest.id}, machine={latest.machine_number}, "
+            f"id={display_issue_id(latest)}, machine={latest.machine_number}, "
             f"status={latest.archive_status}, title={latest.title}"
         )
         if latest.archive_error:
             print(f"Latest archive error: {latest.archive_error}")
+
+
+def print_startup_archive_health(paths: AppPaths, repository: IssueRepository) -> None:
+    # Startup health must stay SQLite/path-only. The Excel archive can grow very
+    # large, so normal startup deliberately avoids opening or scanning it.
+    latest = repository.get_latest_resolved_issue()
+    counts = repository.archive_status_counts()
+
+    print(f"Excel archive path: {paths.archive_path}")
+    print(f"Archive path exists: {'yes' if paths.archive_path.exists() else 'no'}")
+    if counts:
+        summary = ", ".join(f"{status}={count}" for status, count in counts.items())
+        print(f"SQLite archive statuses: {summary}")
+    else:
+        print("SQLite archive statuses: none")
+
+    if latest is None:
+        print("Latest SQLite resolved issue: none")
+        return
+
+    print(
+        "Latest SQLite resolved issue: "
+        f"id={display_issue_id(latest)}, machine={latest.machine_number}, "
+        f"status={latest.archive_status}, title={latest.title}"
+    )
+    if latest.archive_error:
+        print(f"Latest archive error: {latest.archive_error}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -99,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Machines: {len(machines)}")
         print(f"Runtime config path: {paths.runtime_config_path}")
         print(f"Templates: {paths.template_dir}")
-        print_archive_status(paths, repository)
+        print_startup_archive_health(paths, repository)
         return 0
     if args.archive_status:
         print_archive_status(paths, repository)

@@ -36,7 +36,8 @@ def risk_level_color(risk_level: str) -> str:
         RISK_CRITICAL: "#d64545",
         RISK_HIGH: "#e16d2f",
         RISK_MEDIUM: "#f4c542",
-        RISK_LOW: "#4f8fd8",
+        "Moderate": "#f4c542",
+        RISK_LOW: "#33b56b",
         RISK_STABLE: "#33b56b",
         RISK_UNKNOWN: "#8a929a",
     }.get(risk_level, "#8a929a")

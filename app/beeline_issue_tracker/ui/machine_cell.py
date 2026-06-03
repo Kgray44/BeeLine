@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -7,8 +9,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSplitter,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from beeline_issue_tracker.analytics.predictive_service import PredictiveMaintenanceService
@@ -21,10 +24,11 @@ from beeline_issue_tracker.ui.widgets import (
     HoneycombBackground,
     IssueListView,
     MetricPill,
-    PrimaryActionButton,
     StatusBadge,
-    ThemeToggleButton,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class MachineCellPage(HoneycombBackground):
@@ -32,7 +36,7 @@ class MachineCellPage(HoneycombBackground):
     log_issue_requested = Signal(str)
     resolve_issue_requested = Signal(int)
     issue_detail_requested = Signal(int, str)
-    predictive_details_requested = Signal(str)
+    machine_details_requested = Signal(str, str)
 
     def __init__(
         self,
@@ -57,9 +61,19 @@ class MachineCellPage(HoneycombBackground):
         self.back_button = QPushButton("Back to Hive Dashboard")
         self.back_button.clicked.connect(self.back_requested.emit)
         nav.addWidget(self.back_button)
-        nav.addStretch(1)
-        nav.addWidget(ThemeToggleButton(theme_manager))
+        nav.addWidget(BrandHeader("BeeLine Issue Tracker", "Machine Cell", paths.logo_path(), theme_manager), 1)
         page.addLayout(nav)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.content = QWidget()
+        self.content.setObjectName("transparentHost")
+        body = QVBoxLayout(self.content)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(16)
+        self.scroll.setWidget(self.content)
+        page.addWidget(self.scroll, 1)
 
         self.machine_header = QFrame()
         self.machine_header.setObjectName("machineHeader")
@@ -69,13 +83,22 @@ class MachineCellPage(HoneycombBackground):
 
         title_row = QHBoxLayout()
         title_row.setSpacing(14)
-        self.brand_header = BrandHeader("Machine", "", paths.logo_path())
-        title_row.addWidget(self.brand_header, 1)
+        title_text = QVBoxLayout()
+        title_text.setContentsMargins(0, 0, 0, 0)
+        title_text.setSpacing(2)
+        self.machine_title = QLabel("Machine")
+        self.machine_title.setObjectName("machineNumber")
+        self.machine_subtitle = QLabel("")
+        self.machine_subtitle.setObjectName("subtitleLabel")
+        self.machine_meta = QLabel("")
+        self.machine_meta.setObjectName("mutedLabel")
+        self.machine_meta.setWordWrap(True)
+        title_text.addWidget(self.machine_title)
+        title_text.addWidget(self.machine_subtitle)
+        title_text.addWidget(self.machine_meta)
+        title_row.addLayout(title_text, 1)
         self.status_badge = StatusBadge("Unknown/Error")
         title_row.addWidget(self.status_badge)
-        self.log_button = PrimaryActionButton("Report Problem")
-        self.log_button.clicked.connect(self._request_log_issue)
-        title_row.addWidget(self.log_button)
         header_layout.addLayout(title_row)
 
         metrics = QHBoxLayout()
@@ -95,21 +118,7 @@ class MachineCellPage(HoneycombBackground):
             metrics.addWidget(pill)
         metrics.addStretch(1)
         header_layout.addLayout(metrics)
-        page.addWidget(self.machine_header)
-
-        self.memory_panel = QFrame()
-        self.memory_panel.setObjectName("infoPanel")
-        memory_layout = QVBoxLayout(self.memory_panel)
-        memory_layout.setContentsMargins(16, 12, 16, 12)
-        memory_layout.setSpacing(6)
-        memory_title = QLabel("Troubleshooting Memory")
-        memory_title.setObjectName("sectionTitle")
-        self.memory_summary = QLabel()
-        self.memory_summary.setObjectName("mutedLabel")
-        self.memory_summary.setWordWrap(True)
-        memory_layout.addWidget(memory_title)
-        memory_layout.addWidget(self.memory_summary)
-        page.addWidget(self.memory_panel)
+        body.addWidget(self.machine_header)
 
         self.intelligence_panel = QFrame()
         self.intelligence_panel.setObjectName("infoPanel")
@@ -151,16 +160,14 @@ class MachineCellPage(HoneycombBackground):
         intelligence_grid.addWidget(self.intelligence_last_issue, 5, 1, 1, 3)
         intelligence_layout.addLayout(intelligence_grid)
         intelligence_buttons = QHBoxLayout()
-        for label in ("View Predictive Details", "View Trends", "View Related History"):
-            button = QPushButton(label)
-            button.setObjectName("tableActionButton")
-            button.clicked.connect(self._request_predictive_details)
-            intelligence_buttons.addWidget(button)
+        info_button = QPushButton("Machine Info")
+        info_button.setObjectName("tableActionButton")
+        info_button.clicked.connect(lambda _checked=False: self._request_machine_details("overview"))
+        intelligence_buttons.addWidget(info_button)
         intelligence_buttons.addStretch(1)
         intelligence_layout.addLayout(intelligence_buttons)
-        page.addWidget(self.intelligence_panel)
+        body.addWidget(self.intelligence_panel)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
         self.active_list = IssueListView(
             "active",
             "Active/Open Issues",
@@ -171,7 +178,7 @@ class MachineCellPage(HoneycombBackground):
         self.active_list.log_issue_requested.connect(self._request_log_issue)
         self.active_list.detail_requested.connect(self.issue_detail_requested.emit)
         self.active_list.criteria_changed.connect(self.refresh)
-        splitter.addWidget(self.active_list)
+        body.addWidget(self.active_list)
 
         self.resolved_list = IssueListView(
             "resolved",
@@ -180,13 +187,29 @@ class MachineCellPage(HoneycombBackground):
         )
         self.resolved_list.detail_requested.connect(self.issue_detail_requested.emit)
         self.resolved_list.criteria_changed.connect(self.refresh)
-        splitter.addWidget(self.resolved_list)
-        splitter.setSizes([420, 300])
-        page.addWidget(splitter, 1)
+        body.addWidget(self.resolved_list)
+
+        self.memory_panel = QFrame()
+        self.memory_panel.setObjectName("infoPanel")
+        memory_layout = QVBoxLayout(self.memory_panel)
+        memory_layout.setContentsMargins(16, 12, 16, 12)
+        memory_layout.setSpacing(6)
+        memory_title = QLabel("Troubleshooting Memory")
+        memory_title.setObjectName("sectionTitle")
+        self.memory_summary = QLabel()
+        self.memory_summary.setObjectName("mutedLabel")
+        self.memory_summary.setWordWrap(True)
+        memory_layout.addWidget(memory_title)
+        memory_layout.addWidget(self.memory_summary)
+        body.addWidget(self.memory_panel)
+        body.addStretch(1)
 
     def load_machine(self, machine_number: str) -> None:
         self.machine_number = machine_number
         self.refresh()
+
+    def set_can_report(self, enabled: bool) -> None:
+        self.active_list.set_log_action_enabled(enabled)
 
     def refresh(self) -> None:
         if not self.machine_number:
@@ -194,8 +217,9 @@ class MachineCellPage(HoneycombBackground):
 
         summary = self.repository.get_machine_summary(self.machine_number)
         if summary is None:
-            self.brand_header.set_title("Machine not found")
-            self.brand_header.set_subtitle("")
+            self.machine_title.setText("Machine not found")
+            self.machine_subtitle.setText("")
+            self.machine_meta.setText("")
             self.status_badge.set_status("Unknown/Error")
             self.machine_header.setProperty("statusState", "unknown")
             repolish(self.machine_header)
@@ -210,26 +234,31 @@ class MachineCellPage(HoneycombBackground):
             self.resolved_list.set_issues([])
             return
 
-        self.brand_header.set_title(f"Machine {summary.machine_number}")
-        self.brand_header.set_subtitle(summary.name)
+        self.machine_title.setText(f"Machine {summary.machine_number}")
+        self.machine_subtitle.setText(summary.name)
+        self.machine_meta.setText(_machine_meta_text(summary))
         self.status_badge.set_status(summary.calculated_status)
         self.machine_header.setProperty("statusState", status_state(summary.calculated_status))
         repolish(self.machine_header)
 
-        active_query, active_sort, active_limit = self.active_list.criteria()
-        resolved_query, resolved_sort, resolved_limit = self.resolved_list.criteria()
+        active_query, active_sort, active_limit, active_offset = self.active_list.criteria()
+        resolved_query, resolved_sort, resolved_limit, resolved_offset = self.resolved_list.criteria()
         active_issues = self.repository.list_active_issues(
             summary.machine_number,
             query=active_query,
             sort_key=active_sort,
             limit=active_limit,
+            offset=active_offset,
         )
         recent_resolved = self.repository.list_resolved_issues(
             summary.machine_number,
             query=resolved_query,
             sort_key=resolved_sort,
             limit=resolved_limit,
+            offset=resolved_offset,
         )
+        active_matched = self.repository.count_active_issues_matching(summary.machine_number, active_query)
+        resolved_matched = self.repository.count_resolved_issues_matching(summary.machine_number, resolved_query)
         stats = self.repository.get_machine_resolved_stats(summary.machine_number)
 
         self.area_pill.set_value(summary.area)
@@ -239,16 +268,25 @@ class MachineCellPage(HoneycombBackground):
         self.recent_resolved_pill.set_value(str(stats.total_resolved))
         self.memory_summary.setText(_memory_text(stats))
         self._update_intelligence(summary.machine_number)
-        self.active_list.set_issues(active_issues)
-        self.resolved_list.set_issues(recent_resolved)
+        self.active_list.set_query_result(
+            active_issues,
+            matched=active_matched,
+            total=summary.open_issue_count,
+        )
+        self.resolved_list.set_query_result(
+            recent_resolved,
+            matched=resolved_matched,
+            total=stats.total_resolved,
+        )
 
     def _request_log_issue(self) -> None:
         if self.machine_number:
+            logger.debug("Add Issue clicked for machine %s", self.machine_number)
             self.log_issue_requested.emit(self.machine_number)
 
-    def _request_predictive_details(self) -> None:
+    def _request_machine_details(self, section: str) -> None:
         if self.machine_number:
-            self.predictive_details_requested.emit(self.machine_number)
+            self.machine_details_requested.emit(self.machine_number, section)
 
     def _update_intelligence(self, machine_number: str) -> None:
         if self.predictive_service is None:
@@ -291,6 +329,19 @@ def _memory_text(stats) -> str:
         f"Last fix: {last_fix}",
     ]
     return " | ".join(parts)
+
+
+def _machine_meta_text(machine) -> str:
+    parts = [
+        " / ".join(part for part in (machine.area, machine.cell) if part),
+        f"Asset {machine.asset_tag}" if machine.asset_tag else "",
+        f"{machine.manufacturer} {machine.model}".strip(),
+        f"IMM Serial {machine.imm_serial}" if machine.imm_serial else "",
+        f"Robot {machine.robot_type} {machine.robot_model}".strip()
+        if machine.robot_type or machine.robot_model
+        else "",
+    ]
+    return " | ".join(part for part in parts if part)
 
 
 def _format_seconds(seconds: int | None) -> str:

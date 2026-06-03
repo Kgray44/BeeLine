@@ -42,7 +42,7 @@ from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.ui.charts import BarBreakdownChart, LineTrendChart, trend_issue_values
 from beeline_issue_tracker.ui.issue_list_model import format_timestamp, preview_text
 from beeline_issue_tracker.ui.theme import ThemeManager
-from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground, MetricPill, SearchBox, ThemeToggleButton
+from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground, MetricPill, SearchBox
 
 
 class PredictiveMaintenancePage(HoneycombBackground):
@@ -87,7 +87,7 @@ class PredictiveMaintenancePage(HoneycombBackground):
         back = QPushButton("Back to Dashboard")
         back.clicked.connect(self.back_requested.emit)
         header.addWidget(back)
-        header.addWidget(BrandHeader("BeeLine", "Predictive Maintenance", paths.logo_path()), 1)
+        header.addWidget(BrandHeader("BeeLine", "Predictive Maintenance", paths.logo_path(), theme_manager), 1)
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.refresh)
         header.addWidget(refresh)
@@ -97,7 +97,6 @@ class PredictiveMaintenancePage(HoneycombBackground):
         export_summary = QPushButton("Export Summary .txt")
         export_summary.clicked.connect(self._export_summary)
         header.addWidget(export_summary)
-        header.addWidget(ThemeToggleButton(theme_manager))
         page.addLayout(header)
 
         summary_panel = QFrame()

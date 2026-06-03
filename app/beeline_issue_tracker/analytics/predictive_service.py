@@ -167,6 +167,7 @@ class PredictiveMaintenanceService:
             category=resolved.category,
             created_at=resolved.created_at,
             updated_at=resolved.resolved_at,
+            public_issue_id=resolved.public_issue_id,
         )
         resolved_history = [
             issue

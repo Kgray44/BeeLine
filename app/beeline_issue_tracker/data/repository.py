@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from beeline_issue_tracker.domain import (
@@ -11,12 +10,14 @@ from beeline_issue_tracker.domain import (
     Issue,
     IssueAttachment,
     IssueEvent,
+    IssueSearchResult,
     IssueWithMachineContext,
     Machine,
     MachineResolvedStats,
     MachineSummary,
     ResolvedIssue,
     ResolvedIssueWithMachineContext,
+    generate_issue_id,
     status_from_counts,
 )
 
@@ -32,18 +33,24 @@ ACTIVE_SORTS = {
     "date_asc": "created_at ASC, id ASC",
     "title_asc": "LOWER(title) ASC, created_at DESC",
     "title_desc": "LOWER(title) DESC, created_at DESC",
+    "issue_id_asc": "COALESCE(NULLIF(issue_id, ''), printf('%012d', id)) ASC",
+    "issue_id_desc": "COALESCE(NULLIF(issue_id, ''), printf('%012d', id)) DESC",
 }
 RESOLVED_SORTS = {
     "date_desc": "resolved_at DESC, id DESC",
     "date_asc": "resolved_at ASC, id ASC",
     "title_asc": "LOWER(title) ASC, resolved_at DESC",
     "title_desc": "LOWER(title) DESC, resolved_at DESC",
+    "issue_id_asc": "COALESCE(NULLIF(issue_id, ''), printf('%012d', original_issue_id)) ASC",
+    "issue_id_desc": "COALESCE(NULLIF(issue_id, ''), printf('%012d', original_issue_id)) DESC",
 }
 GLOBAL_ACTIVE_SORTS = {
     "date_desc": "ai.created_at DESC, ai.id DESC",
     "date_asc": "ai.created_at ASC, ai.id ASC",
     "title_asc": "LOWER(ai.title) ASC, ai.created_at DESC",
     "title_desc": "LOWER(ai.title) DESC, ai.created_at DESC",
+    "issue_id_asc": "COALESCE(NULLIF(ai.issue_id, ''), printf('%012d', ai.id)) ASC",
+    "issue_id_desc": "COALESCE(NULLIF(ai.issue_id, ''), printf('%012d', ai.id)) DESC",
     "severity": "CASE ai.severity WHEN 'Line Down' THEN 0 WHEN 'Non-Critical' THEN 1 ELSE 2 END, ai.created_at DESC",
     "open_issues": "ai.created_at DESC, ai.id DESC",
 }
@@ -54,7 +61,9 @@ ACTIVE_SEARCH_FIELDS = (
     "severity",
     "category",
     "machine_number",
+    "COALESCE(NULLIF(issue_id, ''), CAST(id AS TEXT))",
 )
+ISSUE_SEARCH_STATES = {"all", "open", "resolved"}
 RESOLVED_SEARCH_FIELDS = (
     "title",
     "description",
@@ -65,6 +74,7 @@ RESOLVED_SEARCH_FIELDS = (
     "solution",
     "resolved_by",
     "archive_status",
+    "COALESCE(NULLIF(issue_id, ''), CAST(original_issue_id AS TEXT))",
 )
 GLOBAL_ACTIVE_SEARCH_FIELDS = (
     "ai.title",
@@ -73,6 +83,22 @@ GLOBAL_ACTIVE_SEARCH_FIELDS = (
     "ai.severity",
     "ai.category",
     "ai.machine_number",
+    "COALESCE(NULLIF(ai.issue_id, ''), CAST(ai.id AS TEXT))",
+    "m.name",
+    "m.area",
+    "m.cell",
+)
+GLOBAL_RESOLVED_SEARCH_FIELDS = (
+    "ri.title",
+    "ri.description",
+    "ri.logged_by",
+    "ri.severity",
+    "ri.category",
+    "ri.machine_number",
+    "ri.solution",
+    "ri.resolved_by",
+    "ri.archive_status",
+    "COALESCE(NULLIF(ri.issue_id, ''), CAST(ri.original_issue_id AS TEXT))",
     "m.name",
     "m.area",
     "m.cell",
@@ -94,6 +120,12 @@ class IssueRepository:
                     m.cell,
                     m.asset_tag,
                     m.display_order,
+                    m.manufacturer,
+                    m.model,
+                    m.imm_serial,
+                    m.robot_type,
+                    m.robot_model,
+                    m.robot_serial,
                     COUNT(ai.id) AS open_issue_count,
                     SUM(CASE WHEN ai.severity = 'Line Down' THEN 1 ELSE 0 END) AS line_down_count,
                     SUM(CASE WHEN ai.severity = 'Non-Critical' THEN 1 ELSE 0 END) AS non_critical_count
@@ -106,7 +138,13 @@ class IssueRepository:
                     m.area,
                     m.cell,
                     m.asset_tag,
-                    m.display_order
+                    m.display_order,
+                    m.manufacturer,
+                    m.model,
+                    m.imm_serial,
+                    m.robot_type,
+                    m.robot_model,
+                    m.robot_serial
                 ORDER BY m.display_order, m.machine_number
                 """
             ).fetchall()
@@ -127,6 +165,12 @@ class IssueRepository:
                     cell=row["cell"],
                     asset_tag=row["asset_tag"],
                     display_order=int(row["display_order"]),
+                    manufacturer=row["manufacturer"],
+                    model=row["model"],
+                    imm_serial=row["imm_serial"],
+                    robot_type=row["robot_type"],
+                    robot_model=row["robot_model"],
+                    robot_serial=row["robot_serial"],
                     calculated_status=status,
                     open_issue_count=open_count,
                 )
@@ -137,7 +181,19 @@ class IssueRepository:
         with connect(self.db_path) as conn:
             row = conn.execute(
                 """
-                SELECT machine_number, name, area, cell, asset_tag, display_order
+                SELECT
+                    machine_number,
+                    name,
+                    area,
+                    cell,
+                    asset_tag,
+                    display_order,
+                    manufacturer,
+                    model,
+                    imm_serial,
+                    robot_type,
+                    robot_model,
+                    robot_serial
                 FROM machines
                 WHERE machine_number = ? AND is_active = 1
                 """,
@@ -152,12 +208,78 @@ class IssueRepository:
             cell=row["cell"],
             asset_tag=row["asset_tag"],
             display_order=int(row["display_order"]),
+            manufacturer=row["manufacturer"],
+            model=row["model"],
+            imm_serial=row["imm_serial"],
+            robot_type=row["robot_type"],
+            robot_model=row["robot_model"],
+            robot_serial=row["robot_serial"],
         )
 
     def get_machine_summary(self, machine_number: str) -> MachineSummary | None:
-        return next(
-            (machine for machine in self.list_machines_with_status() if machine.machine_number == machine_number),
-            None,
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    m.machine_number,
+                    m.name,
+                    m.area,
+                    m.cell,
+                    m.asset_tag,
+                    m.display_order,
+                    m.manufacturer,
+                    m.model,
+                    m.imm_serial,
+                    m.robot_type,
+                    m.robot_model,
+                    m.robot_serial,
+                    COUNT(ai.id) AS open_issue_count,
+                    SUM(CASE WHEN ai.severity = 'Line Down' THEN 1 ELSE 0 END) AS line_down_count,
+                    SUM(CASE WHEN ai.severity = 'Non-Critical' THEN 1 ELSE 0 END) AS non_critical_count
+                FROM machines m
+                LEFT JOIN active_issues ai
+                    ON ai.machine_number = m.machine_number
+                WHERE m.machine_number = ?
+                    AND m.is_active = 1
+                GROUP BY
+                    m.machine_number,
+                    m.name,
+                    m.area,
+                    m.cell,
+                    m.asset_tag,
+                    m.display_order,
+                    m.manufacturer,
+                    m.model,
+                    m.imm_serial,
+                    m.robot_type,
+                    m.robot_model,
+                    m.robot_serial
+                """,
+                (machine_number,),
+            ).fetchone()
+        if row is None:
+            return None
+        open_count = int(row["open_issue_count"] or 0)
+        status = status_from_counts(
+            int(row["line_down_count"] or 0),
+            int(row["non_critical_count"] or 0),
+            open_count,
+        )
+        return MachineSummary(
+            machine_number=row["machine_number"],
+            name=row["name"],
+            area=row["area"],
+            cell=row["cell"],
+            asset_tag=row["asset_tag"],
+            display_order=int(row["display_order"]),
+            manufacturer=row["manufacturer"],
+            model=row["model"],
+            imm_serial=row["imm_serial"],
+            robot_type=row["robot_type"],
+            robot_model=row["robot_model"],
+            robot_serial=row["robot_serial"],
+            calculated_status=status,
+            open_issue_count=open_count,
         )
 
     def list_active_issues(
@@ -166,10 +288,21 @@ class IssueRepository:
         query: str = "",
         sort_key: str = "date_desc",
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[Issue]:
         with connect(self.db_path) as conn:
             sql = """
-                SELECT id, machine_number, logged_by, title, description, severity, category, created_at, updated_at
+                SELECT
+                    id,
+                    issue_id AS public_issue_id,
+                    machine_number,
+                    logged_by,
+                    title,
+                    description,
+                    severity,
+                    category,
+                    created_at,
+                    updated_at
                 FROM active_issues
                 WHERE machine_number = ?
                 """
@@ -179,8 +312,9 @@ class IssueRepository:
             params.extend(search_params)
             sql += f" ORDER BY {ACTIVE_SORTS.get(sort_key, ACTIVE_SORTS['date_desc'])}"
             if limit is not None:
-                sql += " LIMIT ?"
+                sql += " LIMIT ? OFFSET ?"
                 params.append(max(0, int(limit)))
+                params.append(max(0, int(offset)))
             rows = conn.execute(sql, params).fetchall()
         return [self._issue_from_row(row) for row in rows]
 
@@ -188,7 +322,17 @@ class IssueRepository:
         with connect(self.db_path) as conn:
             row = conn.execute(
                 """
-                SELECT id, machine_number, logged_by, title, description, severity, category, created_at, updated_at
+                SELECT
+                    id,
+                    issue_id AS public_issue_id,
+                    machine_number,
+                    logged_by,
+                    title,
+                    description,
+                    severity,
+                    category,
+                    created_at,
+                    updated_at
                 FROM active_issues
                 WHERE id = ?
                 """,
@@ -208,11 +352,13 @@ class IssueRepository:
         query: str = "",
         sort_key: str = "date_desc",
         limit: int | None = 10,
+        offset: int = 0,
     ) -> list[ResolvedIssue]:
         with connect(self.db_path) as conn:
             sql = """
                 SELECT
                     id,
+                    issue_id AS public_issue_id,
                     original_issue_id,
                     machine_number,
                     logged_by,
@@ -235,13 +381,59 @@ class IssueRepository:
             params.extend(search_params)
             sql += f" ORDER BY {RESOLVED_SORTS.get(sort_key, RESOLVED_SORTS['date_desc'])}"
             if limit is not None:
-                sql += " LIMIT ?"
+                sql += " LIMIT ? OFFSET ?"
                 params.append(max(0, int(limit)))
+                params.append(max(0, int(offset)))
             rows = conn.execute(sql, params).fetchall()
         return [self._resolved_from_row(row) for row in rows]
 
-    def list_recent_resolved_issues(self, machine_number: str, limit: int | None = 8) -> list[ResolvedIssue]:
+    def list_recent_resolved_issues(
+        self,
+        machine_number: str,
+        limit: int | None = 50,
+        *,
+        allow_unlimited: bool = False,
+    ) -> list[ResolvedIssue]:
+        if limit is None and not allow_unlimited:
+            limit = 50
         return self.list_resolved_issues(machine_number, limit=limit)
+
+    def count_active_issues_matching(self, machine_number: str, query: str = "") -> int:
+        return self._count_machine_issues(
+            "active_issues",
+            machine_number,
+            ACTIVE_SEARCH_FIELDS,
+            query,
+        )
+
+    def count_resolved_issues_matching(self, machine_number: str, query: str = "") -> int:
+        return self._count_machine_issues(
+            "resolved_issues_cache",
+            machine_number,
+            RESOLVED_SEARCH_FIELDS,
+            query,
+        )
+
+    def count_total_active_issues(self, machine_number: str) -> int:
+        return self.count_active_issues_matching(machine_number)
+
+    def count_total_resolved_issues(self, machine_number: str) -> int:
+        return self.count_resolved_issues_matching(machine_number)
+
+    def _count_machine_issues(
+        self,
+        table: str,
+        machine_number: str,
+        fields: tuple[str, ...],
+        query: str = "",
+    ) -> int:
+        with connect(self.db_path) as conn:
+            sql = f"SELECT COUNT(*) FROM {table} WHERE machine_number = ?"
+            params: list[str] = [machine_number]
+            search_sql, search_params = _search_clause(fields, query)
+            sql += search_sql
+            params.extend(search_params)
+            return int(conn.execute(sql, params).fetchone()[0])
 
     def get_resolved_issue(self, resolved_issue_id: int) -> ResolvedIssue | None:
         with connect(self.db_path) as conn:
@@ -249,6 +441,7 @@ class IssueRepository:
                 """
                 SELECT
                     id,
+                    issue_id AS public_issue_id,
                     original_issue_id,
                     machine_number,
                     logged_by,
@@ -317,6 +510,107 @@ class IssueRepository:
             "line_down_active": int(line_down_count),
         }
 
+    def search_issues(
+        self,
+        query: str = "",
+        *,
+        state_filter: str = "all",
+        limit: int | None = 100,
+        machine_number: str | None = None,
+    ) -> list[IssueSearchResult]:
+        normalized_state = state_filter if state_filter in ISSUE_SEARCH_STATES else "all"
+        result_limit = None if limit is None else max(0, int(limit))
+        rows: list[IssueSearchResult] = []
+        with connect(self.db_path) as conn:
+            if normalized_state in {"all", "open"}:
+                sql = """
+                    SELECT
+                        'open' AS state,
+                        'Open Issue' AS source,
+                        ai.id AS issue_id,
+                        COALESCE(NULLIF(ai.issue_id, ''), CAST(ai.id AS TEXT)) AS public_issue_id,
+                        ai.machine_number,
+                        m.name AS machine_name,
+                        COALESCE(NULLIF(m.model, ''), m.name) AS machine_model,
+                        ai.title,
+                        ai.description,
+                        ai.severity AS status,
+                        ai.category,
+                        ai.logged_by,
+                        ai.created_at,
+                        ai.updated_at,
+                        '' AS resolved_at,
+                        '' AS resolved_by,
+                        '' AS resolution,
+                        '' AS history_text
+                    FROM active_issues ai
+                    INNER JOIN machines m ON m.machine_number = ai.machine_number
+                    WHERE m.is_active = 1
+                    """
+                params: list[str | int] = []
+                if machine_number:
+                    sql += " AND ai.machine_number = ?"
+                    params.append(machine_number)
+                search_sql, search_params = _search_clause(GLOBAL_ACTIVE_SEARCH_FIELDS, query)
+                sql += search_sql
+                params.extend(search_params)
+                sql += " ORDER BY ai.created_at DESC, ai.id DESC"
+                if result_limit is not None:
+                    sql += " LIMIT ?"
+                    params.append(result_limit)
+                active_rows = conn.execute(sql, params).fetchall()
+                rows.extend(self._issue_search_result_from_row(row) for row in active_rows)
+
+            if normalized_state in {"all", "resolved"}:
+                sql = """
+                    SELECT
+                        'resolved' AS state,
+                        'Recent Archive' AS source,
+                        ri.id AS issue_id,
+                        COALESCE(NULLIF(ri.issue_id, ''), CAST(ri.original_issue_id AS TEXT)) AS public_issue_id,
+                        ri.machine_number,
+                        m.name AS machine_name,
+                        COALESCE(NULLIF(m.model, ''), m.name) AS machine_model,
+                        ri.title,
+                        ri.description,
+                        ri.severity AS status,
+                        ri.category,
+                        ri.logged_by,
+                        ri.created_at,
+                        ri.resolved_at AS updated_at,
+                        ri.resolved_at,
+                        ri.resolved_by,
+                        ri.solution AS resolution,
+                        '' AS history_text
+                    FROM resolved_issues_cache ri
+                    INNER JOIN machines m ON m.machine_number = ri.machine_number
+                    WHERE m.is_active = 1
+                    """
+                params = []
+                if machine_number:
+                    sql += " AND ri.machine_number = ?"
+                    params.append(machine_number)
+                search_sql, search_params = _search_clause(GLOBAL_RESOLVED_SEARCH_FIELDS, query)
+                sql += search_sql
+                params.extend(search_params)
+                sql += " ORDER BY ri.resolved_at DESC, ri.id DESC"
+                if result_limit is not None:
+                    sql += " LIMIT ?"
+                    params.append(result_limit)
+                resolved_rows = conn.execute(sql, params).fetchall()
+                rows.extend(self._issue_search_result_from_row(row) for row in resolved_rows)
+
+        rows.sort(
+            key=lambda row: (
+                _timestamp_score(row.resolved_at or row.updated_at or row.created_at),
+                1 if row.state == "open" else 0,
+            ),
+            reverse=True,
+        )
+        if result_limit is None:
+            return rows
+        return rows[:result_limit]
+
     def list_all_active_issues(
         self,
         query: str = "",
@@ -326,11 +620,13 @@ class IssueRepository:
         cell: str | None = None,
         sort_key: str = "date_desc",
         limit: int | None = 50,
+        offset: int = 0,
     ) -> list[Issue]:
         with connect(self.db_path) as conn:
             sql = """
                 SELECT
                     ai.id,
+                    ai.issue_id AS public_issue_id,
                     ai.machine_number,
                     ai.logged_by,
                     ai.title,
@@ -361,8 +657,9 @@ class IssueRepository:
             params.extend(search_params)
             sql += f" ORDER BY {GLOBAL_ACTIVE_SORTS.get(sort_key, GLOBAL_ACTIVE_SORTS['date_desc'])}"
             if limit is not None:
-                sql += " LIMIT ?"
+                sql += " LIMIT ? OFFSET ?"
                 params.append(max(0, int(limit)))
+                params.append(max(0, int(offset)))
             rows = conn.execute(sql, params).fetchall()
         return [self._issue_from_row(row) for row in rows]
 
@@ -372,6 +669,7 @@ class IssueRepository:
                 """
                 SELECT
                     id,
+                    issue_id AS public_issue_id,
                     original_issue_id,
                     machine_number,
                     logged_by,
@@ -404,6 +702,97 @@ class IssueRepository:
             ).fetchall()
         return {row["archive_status"]: int(row["status_count"]) for row in rows}
 
+    def list_failed_archive_writes(self, limit: int = 100) -> list[ResolvedIssue]:
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id,
+                    issue_id AS public_issue_id,
+                    original_issue_id,
+                    machine_number,
+                    logged_by,
+                    title,
+                    description,
+                    severity,
+                    category,
+                    created_at,
+                    resolved_at,
+                    resolved_by,
+                    solution,
+                    archive_status,
+                    archive_error
+                FROM resolved_issues_cache
+                WHERE archive_status IN ('failed', 'retry_pending')
+                ORDER BY resolved_at ASC, id ASC
+                LIMIT ?
+                """,
+                (max(0, int(limit)),),
+            ).fetchall()
+        return [self._resolved_from_row(row) for row in rows]
+
+    def mark_archive_retry_pending(self, resolved_issue_ids: list[int]) -> None:
+        if not resolved_issue_ids:
+            return
+        with connect(self.db_path) as conn:
+            conn.executemany(
+                """
+                UPDATE resolved_issues_cache
+                SET archive_status = 'retry_pending',
+                    archive_error = ''
+                WHERE id = ?
+                    AND archive_status IN ('failed', 'retry_pending')
+                """,
+                [(int(issue_id),) for issue_id in resolved_issue_ids],
+            )
+
+    def trim_resolved_issue_cache(
+        self,
+        *,
+        keep_days: int = 180,
+        keep_minimum: int = 1000,
+        keep_per_machine_minimum: int = 25,
+        now: datetime | None = None,
+    ) -> int:
+        now_utc = now or datetime.now(timezone.utc)
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.replace(tzinfo=timezone.utc)
+        cutoff = now_utc - timedelta(days=max(1, int(keep_days)))
+
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, machine_number, resolved_at
+                FROM resolved_issues_cache
+                WHERE archive_status = 'archived'
+                ORDER BY resolved_at DESC, id DESC
+                """
+            ).fetchall()
+            protected: set[int] = set()
+            for row in rows:
+                resolved_at = _parse_iso(row["resolved_at"])
+                if resolved_at is not None and resolved_at >= cutoff:
+                    protected.add(int(row["id"]))
+
+            protected.update(int(row["id"]) for row in rows[: max(0, int(keep_minimum))])
+
+            per_machine_counts: dict[str, int] = {}
+            for row in rows:
+                machine_number = row["machine_number"]
+                count = per_machine_counts.get(machine_number, 0)
+                if count < max(0, int(keep_per_machine_minimum)):
+                    protected.add(int(row["id"]))
+                    per_machine_counts[machine_number] = count + 1
+
+            delete_ids = [int(row["id"]) for row in rows if int(row["id"]) not in protected]
+            if not delete_ids:
+                return 0
+            conn.executemany(
+                "DELETE FROM resolved_issues_cache WHERE id = ? AND archive_status = 'archived'",
+                [(issue_id,) for issue_id in delete_ids],
+            )
+            return len(delete_ids)
+
     def log_issue(
         self,
         *,
@@ -413,6 +802,7 @@ class IssueRepository:
         description: str,
         severity: str,
         category: str = "",
+        created_at: str | None = None,
     ) -> Issue:
         machine_number = machine_number.strip()
         logged_by = logged_by.strip()
@@ -430,21 +820,23 @@ class IssueRepository:
         if severity not in ACTIVE_SEVERITIES:
             raise ValueError("Status must be Line Down or Non-Critical.")
 
-        now = utc_now_iso()
+        now = (created_at or utc_now_iso()).strip()
         with connect(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             machine_exists = conn.execute(
                 "SELECT 1 FROM machines WHERE machine_number = ? AND is_active = 1",
                 (machine_number,),
             ).fetchone()
             if machine_exists is None:
                 raise ValueError(f"Machine {machine_number} was not found.")
+            public_issue_id = generate_issue_id(now, self._existing_public_issue_ids(conn))
             cursor = conn.execute(
                 """
                 INSERT INTO active_issues
-                    (machine_number, logged_by, title, description, severity, category, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (issue_id, machine_number, logged_by, title, description, severity, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (machine_number, logged_by, title, description, severity, category, now, now),
+                (public_issue_id, machine_number, logged_by, title, description, severity, category, now, now),
             )
             issue_id = int(cursor.lastrowid)
             self._insert_event(
@@ -455,6 +847,7 @@ class IssueRepository:
                 event_type="issue_created",
                 actor=logged_by,
                 details={
+                    "issue_id": public_issue_id,
                     "title": title,
                     "severity": severity,
                     "category": category,
@@ -476,7 +869,7 @@ class IssueRepository:
         with connect(self.db_path) as conn:
             issue = conn.execute(
                 """
-                SELECT id, machine_number, logged_by, title, description, severity, category, created_at, updated_at
+                SELECT id, issue_id, machine_number, logged_by, title, description, severity, category, created_at, updated_at
                 FROM active_issues
                 WHERE id = ?
                 """,
@@ -489,6 +882,7 @@ class IssueRepository:
                 """
                 INSERT INTO resolved_issues_cache
                     (
+                        issue_id,
                         original_issue_id,
                         machine_number,
                         logged_by,
@@ -502,9 +896,10 @@ class IssueRepository:
                         solution,
                         archive_status
                     )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                 """,
                 (
+                    issue["issue_id"] or "",
                     int(issue["id"]),
                     issue["machine_number"],
                     issue["logged_by"],
@@ -539,6 +934,7 @@ class IssueRepository:
                 """
                 SELECT
                     id,
+                    issue_id AS public_issue_id,
                     original_issue_id,
                     machine_number,
                     logged_by,
@@ -563,7 +959,7 @@ class IssueRepository:
         return self._resolved_from_row(resolved)
 
     def mark_archive_result(self, resolved_issue_id: int, *, success: bool, error: str = "") -> None:
-        archive_status = "archived" if success else "archive_error"
+        archive_status = "archived" if success else "failed"
         with connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -724,54 +1120,109 @@ class IssueRepository:
         return self._attachment_from_row(row)
 
     def get_machine_resolved_stats(self, machine_number: str) -> MachineResolvedStats:
-        resolved = self.list_resolved_issues(machine_number, sort_key="date_desc", limit=None)
-        if not resolved:
-            return MachineResolvedStats(
-                machine_number=machine_number,
-                total_resolved=0,
-                most_common_category="",
-                most_common_title="",
-                last_resolved_title="",
-                last_resolved_at="",
-                average_time_open_seconds=None,
-                recurring_warning="",
+        with connect(self.db_path) as conn:
+            total_resolved = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM resolved_issues_cache
+                    WHERE machine_number = ?
+                    """,
+                    (machine_number,),
+                ).fetchone()[0]
             )
+            if total_resolved == 0:
+                return MachineResolvedStats(
+                    machine_number=machine_number,
+                    total_resolved=0,
+                    most_common_category="",
+                    most_common_title="",
+                    last_resolved_title="",
+                    last_resolved_at="",
+                    average_time_open_seconds=None,
+                    recurring_warning="",
+                )
 
-        category_counts = Counter(issue.category.strip() for issue in resolved if issue.category.strip())
-        title_labels: dict[str, str] = {}
-        title_counts: Counter[str] = Counter()
-        durations: list[int] = []
-        for issue in resolved:
-            normalized_title = _normalize_title(issue.title)
-            if normalized_title:
-                title_counts[normalized_title] += 1
-                title_labels.setdefault(normalized_title, issue.title)
-            created = _parse_iso(issue.created_at)
-            resolved_at = _parse_iso(issue.resolved_at)
-            if created and resolved_at:
-                durations.append(max(0, int((resolved_at - created).total_seconds())))
+            category_row = conn.execute(
+                """
+                SELECT category, COUNT(*) AS issue_count
+                FROM resolved_issues_cache
+                WHERE machine_number = ? AND TRIM(category) <> ''
+                GROUP BY category
+                ORDER BY issue_count DESC, category COLLATE NOCASE ASC
+                LIMIT 1
+                """,
+                (machine_number,),
+            ).fetchone()
+            title_row = conn.execute(
+                """
+                SELECT title, COUNT(*) AS issue_count
+                FROM resolved_issues_cache
+                WHERE machine_number = ? AND TRIM(title) <> ''
+                GROUP BY LOWER(TRIM(title))
+                ORDER BY issue_count DESC, MAX(resolved_at) DESC
+                LIMIT 1
+                """,
+                (machine_number,),
+            ).fetchone()
+            latest_row = conn.execute(
+                """
+                SELECT title, resolved_at
+                FROM resolved_issues_cache
+                WHERE machine_number = ?
+                ORDER BY resolved_at DESC, id DESC
+                LIMIT 1
+                """,
+                (machine_number,),
+            ).fetchone()
+            average_row = conn.execute(
+                """
+                SELECT AVG(MAX(0, strftime('%s', resolved_at) - strftime('%s', created_at))) AS average_seconds
+                FROM resolved_issues_cache
+                WHERE machine_number = ?
+                    AND strftime('%s', resolved_at) IS NOT NULL
+                    AND strftime('%s', created_at) IS NOT NULL
+                """,
+                (machine_number,),
+            ).fetchone()
 
-        most_common_category = category_counts.most_common(1)[0][0] if category_counts else ""
-        most_common_title_key = title_counts.most_common(1)[0][0] if title_counts else ""
-        most_common_title = title_labels.get(most_common_title_key, "")
+        most_common_category = category_row["category"] if category_row is not None else ""
+        most_common_title = title_row["title"] if title_row is not None else ""
+        title_count = int(title_row["issue_count"] or 0) if title_row is not None else 0
+        category_count = int(category_row["issue_count"] or 0) if category_row is not None else 0
         recurring_warning = ""
-        if most_common_title_key and title_counts[most_common_title_key] >= 2:
-            recurring_warning = f"{most_common_title} repeated {title_counts[most_common_title_key]} times"
-        elif most_common_category and category_counts[most_common_category] >= 2:
-            recurring_warning = f"{most_common_category} repeated {category_counts[most_common_category]} times"
+        if most_common_title and title_count >= 2:
+            recurring_warning = f"{most_common_title} repeated {title_count} times"
+        elif most_common_category and category_count >= 2:
+            recurring_warning = f"{most_common_category} repeated {category_count} times"
 
-        average_seconds = int(sum(durations) / len(durations)) if durations else None
-        latest = resolved[0]
+        average_value = average_row["average_seconds"] if average_row is not None else None
+        average_seconds = int(average_value) if average_value is not None else None
         return MachineResolvedStats(
             machine_number=machine_number,
-            total_resolved=len(resolved),
+            total_resolved=total_resolved,
             most_common_category=most_common_category,
             most_common_title=most_common_title,
-            last_resolved_title=latest.title,
-            last_resolved_at=latest.resolved_at,
+            last_resolved_title=latest_row["title"] if latest_row is not None else "",
+            last_resolved_at=latest_row["resolved_at"] if latest_row is not None else "",
             average_time_open_seconds=average_seconds,
             recurring_warning=recurring_warning,
         )
+
+    @staticmethod
+    def _existing_public_issue_ids(conn) -> list[str]:
+        rows = conn.execute(
+            """
+            SELECT issue_id
+            FROM active_issues
+            WHERE issue_id <> ''
+            UNION
+            SELECT issue_id
+            FROM resolved_issues_cache
+            WHERE issue_id <> ''
+            """
+        ).fetchall()
+        return [str(row["issue_id"]) for row in rows if row["issue_id"]]
 
     @staticmethod
     def _insert_event(
@@ -813,6 +1264,7 @@ class IssueRepository:
             category=row["category"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            public_issue_id=row["public_issue_id"],
         )
 
     @staticmethod
@@ -832,6 +1284,7 @@ class IssueRepository:
             solution=row["solution"],
             archive_status=row["archive_status"],
             archive_error=row["archive_error"],
+            public_issue_id=row["public_issue_id"],
         )
 
     @staticmethod
@@ -861,6 +1314,29 @@ class IssueRepository:
             created_by=row["created_by"],
         )
 
+    @staticmethod
+    def _issue_search_result_from_row(row) -> IssueSearchResult:
+        return IssueSearchResult(
+            state=row["state"],
+            issue_id=int(row["issue_id"]),
+            machine_number=row["machine_number"],
+            machine_name=row["machine_name"],
+            machine_model=row["machine_model"],
+            title=row["title"],
+            description=row["description"],
+            status=row["status"],
+            category=row["category"],
+            logged_by=row["logged_by"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            resolved_at=row["resolved_at"],
+            resolved_by=row["resolved_by"],
+            resolution=row["resolution"],
+            history_text=row["history_text"],
+            public_issue_id=row["public_issue_id"],
+            source=row["source"],
+        )
+
 
 def _search_clause(fields: tuple[str, ...], query: str) -> tuple[str, list[str]]:
     terms = [term for term in " ".join(query.casefold().split()).split(" ") if term]
@@ -886,14 +1362,33 @@ def _parse_iso(value: str) -> datetime | None:
     return timestamp
 
 
-def _normalize_title(value: str) -> str:
-    words = re.findall(r"[a-z0-9]+", value.casefold())
-    stop_words = {"the", "a", "an", "and", "or", "to", "is", "at", "on", "of", "for"}
-    return " ".join(word for word in words if word not in stop_words)
-
-
 def _keywords(value: str) -> set[str]:
     return {word for word in re.findall(r"[a-z0-9]+", value.casefold()) if len(word) >= 4}
+
+
+def _issue_search_text(result: IssueSearchResult) -> str:
+    return " ".join(
+        str(value).casefold()
+        for value in (
+            result.state,
+            result.public_issue_id,
+            result.machine_number,
+            result.machine_name,
+            result.machine_model,
+            result.title,
+            result.description,
+            result.status,
+            result.category,
+            result.logged_by,
+            result.created_at,
+            result.updated_at,
+            result.resolved_at,
+            result.resolved_by,
+            result.resolution,
+            result.history_text,
+        )
+        if value
+    )
 
 
 def _timestamp_score(value: str) -> float:

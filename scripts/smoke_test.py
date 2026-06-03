@@ -15,7 +15,7 @@ for path in (APP_DIR, PROJECT_ROOT):
 from beeline_issue_tracker.data.archive import ARCHIVE_SHEET, GROUPED_SHEET, ExcelArchive
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
-from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, NO_ISSUES
+from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, NO_ISSUES, display_issue_id
 
 
 DEMO_MACHINES = (
@@ -81,7 +81,8 @@ def main() -> int:
         assert worksheet.sheet_state == "visible"
         assert worksheet.max_row == 2
         assert worksheet["A2"].value == resolved.id
-        assert worksheet["E2"].value == resolved.title
+        assert worksheet["C2"].value == display_issue_id(resolved)
+        assert worksheet["F2"].value == resolved.title
         grouped = workbook[GROUPED_SHEET]
         assert grouped["A1"].value == "BeeLine Resolved Issues by Date"
         assert grouped.row_dimensions[5].outlineLevel == 1

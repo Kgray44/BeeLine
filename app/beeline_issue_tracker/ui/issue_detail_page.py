@@ -18,6 +18,7 @@ from beeline_issue_tracker.domain import (
     IssueWithMachineContext,
     ResolvedIssue,
     ResolvedIssueWithMachineContext,
+    display_issue_id,
 )
 from beeline_issue_tracker.ui.issue_list_model import format_duration_between, format_timestamp, preview_text
 from beeline_issue_tracker.ui.theme import ThemeManager, repolish, status_state
@@ -28,7 +29,6 @@ from beeline_issue_tracker.ui.widgets import (
     MetricPill,
     PrimaryActionButton,
     StatusBadge,
-    ThemeToggleButton,
 )
 
 
@@ -57,7 +57,6 @@ class IssueDetailPage(HoneycombBackground):
         self.machine_button.clicked.connect(self._go_to_machine)
         nav.addWidget(self.machine_button)
         nav.addStretch(1)
-        nav.addWidget(ThemeToggleButton(theme_manager))
         page.addLayout(nav)
 
         self.header = QFrame()
@@ -65,7 +64,7 @@ class IssueDetailPage(HoneycombBackground):
         header_layout = QHBoxLayout(self.header)
         header_layout.setContentsMargins(18, 16, 18, 16)
         header_layout.setSpacing(14)
-        self.brand_header = BrandHeader("Issue Detail", "", paths.logo_path())
+        self.brand_header = BrandHeader("Issue Detail", "", paths.logo_path(), theme_manager)
         header_layout.addWidget(self.brand_header, 1)
         self.status_badge = StatusBadge("Unknown/Error")
         header_layout.addWidget(self.status_badge)
@@ -103,6 +102,7 @@ class IssueDetailPage(HoneycombBackground):
         self._clear_content()
         self._add_metric_row(
             (
+                ("Issue ID", display_issue_id(issue)),
                 ("Machine", issue.machine_number),
                 ("Area", context.machine.area if context.machine else "-"),
                 ("Cell", context.machine.cell if context.machine else "-"),
@@ -118,7 +118,7 @@ class IssueDetailPage(HoneycombBackground):
                 ("Logged by", issue.logged_by),
                 ("Created", format_timestamp(issue.created_at)),
                 ("Category", issue.category or "-"),
-                ("Issue ID", str(issue.id)),
+                ("Internal record ID", str(issue.id)),
             ),
         )
         self._add_future_sections(
@@ -147,6 +147,7 @@ class IssueDetailPage(HoneycombBackground):
         self._clear_content()
         self._add_metric_row(
             (
+                ("Issue ID", display_issue_id(issue)),
                 ("Machine", issue.machine_number),
                 ("Area", context.machine.area if context.machine else "-"),
                 ("Cell", context.machine.cell if context.machine else "-"),
@@ -168,7 +169,7 @@ class IssueDetailPage(HoneycombBackground):
                 ("Created", format_timestamp(issue.created_at)),
                 ("Resolved", format_timestamp(issue.resolved_at)),
                 ("Category", issue.category or "-"),
-                ("Original issue ID", str(issue.original_issue_id)),
+                ("Original numeric ID", str(issue.original_issue_id)),
                 ("Resolved/cache ID", str(issue.id)),
                 ("Archive status", archive_status),
             ),
@@ -314,7 +315,7 @@ class IssueDetailPage(HoneycombBackground):
                     )
                     issue_id = issue.issue_id
                 else:
-                    label_text = f"{preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at)}"
+                    label_text = f"{display_issue_id(issue)} | {preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at)}"
                     issue_id = issue.id
                 label = QLabel(label_text)
                 label.setWordWrap(True)

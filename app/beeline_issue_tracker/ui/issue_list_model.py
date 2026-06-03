@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Iterable, TypeVar
 
-from beeline_issue_tracker.domain import Issue, ResolvedIssue
+from beeline_issue_tracker.domain import Issue, ResolvedIssue, display_issue_id, issue_id_sort_key
 
 
 TITLE_ASC = "title_asc"
 TITLE_DESC = "title_desc"
 DATE_DESC = "date_desc"
 DATE_ASC = "date_asc"
+ISSUE_ID_ASC = "issue_id_asc"
+ISSUE_ID_DESC = "issue_id_desc"
 
 SORT_OPTIONS = (
     ("Newest First", DATE_DESC),
     ("Oldest First", DATE_ASC),
+    ("Issue ID A-Z", ISSUE_ID_ASC),
+    ("Issue ID Z-A", ISSUE_ID_DESC),
     ("Title A-Z", TITLE_ASC),
     ("Title Z-A", TITLE_DESC),
 )
@@ -24,7 +29,7 @@ LATEST_OPTIONS = (
     ("Latest 10", 10),
     ("Latest 20", 20),
     ("Latest 50", 50),
-    ("All", None),
+    ("Latest 100", 100),
 )
 
 IssueLike = TypeVar("IssueLike", Issue, ResolvedIssue)
@@ -80,6 +85,10 @@ def sort_issues(
         return sorted(rows, key=lambda issue: issue.title.casefold())
     if sort_key == TITLE_DESC:
         return sorted(rows, key=lambda issue: issue.title.casefold(), reverse=True)
+    if sort_key == ISSUE_ID_ASC:
+        return sorted(rows, key=issue_id_sort_key)
+    if sort_key == ISSUE_ID_DESC:
+        return sorted(rows, key=issue_id_sort_key, reverse=True)
     if sort_key == DATE_ASC:
         return sorted(rows, key=lambda issue: parse_timestamp(str(getattr(issue, date_field, ""))))
     return sorted(rows, key=lambda issue: parse_timestamp(str(getattr(issue, date_field, ""))), reverse=True)
@@ -94,6 +103,7 @@ def limit_issues(issues: Iterable[IssueLike], latest_limit: int | None) -> list[
 
 def issue_search_text(issue: Issue | ResolvedIssue, *, include_resolved_fields: bool = False) -> str:
     fields = [
+        display_issue_id(issue),
         issue.title,
         issue.description,
         issue.logged_by,
@@ -106,6 +116,7 @@ def issue_search_text(issue: Issue | ResolvedIssue, *, include_resolved_fields: 
     return " ".join(str(field).casefold() for field in fields if field)
 
 
+@lru_cache(maxsize=20000)
 def parse_timestamp(value: str) -> datetime:
     if not value:
         return datetime.min.replace(tzinfo=timezone.utc)

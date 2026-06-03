@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import math
+import logging
+from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -22,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from beeline_issue_tracker.domain import Issue, MachineSummary, ResolvedIssue
+from beeline_issue_tracker.domain import Issue, MachineSummary, ResolvedIssue, display_issue_id
 from beeline_issue_tracker.ui.issue_list_model import (
     DATE_DESC,
     LATEST_OPTIONS,
@@ -36,31 +38,53 @@ from beeline_issue_tracker.ui.issue_list_model import (
 from beeline_issue_tracker.ui.theme import DARK_THEME, ThemeManager, repolish, status_state, theme_from_name
 
 
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=8)
+def load_scaled_logo(path: str, width: int, height: int) -> QPixmap:
+    pixmap = QPixmap(path)
+    if pixmap.isNull():
+        return QPixmap()
+    return pixmap.scaled(
+        width,
+        height,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+
+
 class BrandHeader(QWidget):
-    def __init__(self, title: str, subtitle: str, logo_path: Path | None, parent=None):
+    def __init__(
+        self,
+        title: str,
+        subtitle: str,
+        logo_path: Path | None,
+        theme_manager: ThemeManager | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
+        self.theme_manager = theme_manager
+        self._logo_source_pixmap: QPixmap | None = None
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
-        logo = QLabel("BeeLine")
-        logo.setObjectName("brandText")
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setMinimumSize(88, 46)
-        logo.setMaximumHeight(52)
+        self.logo = QLabel("Nolato")
+        self.logo.setObjectName("brandText")
+        self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.logo.setMinimumSize(92, 48)
+        self.logo.setMaximumSize(154, 58)
         if logo_path is not None:
-            pixmap = QPixmap(str(logo_path))
+            pixmap = load_scaled_logo(str(logo_path), 148, 54)
             if not pixmap.isNull():
-                logo.setText("")
-                logo.setPixmap(
-                    pixmap.scaled(
-                        120,
-                        46,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
-        layout.addWidget(logo)
+                self.logo.setText("")
+                self.logo.setProperty("hasLogo", True)
+                self._logo_source_pixmap = pixmap
+                self._refresh_logo_pixmap()
+                if self.theme_manager is not None:
+                    self.theme_manager.theme_changed.connect(lambda _theme: self._refresh_logo_pixmap())
+        layout.addWidget(self.logo)
 
         text_block = QVBoxLayout()
         text_block.setContentsMargins(0, 0, 0, 0)
@@ -78,6 +102,30 @@ class BrandHeader(QWidget):
 
     def set_subtitle(self, subtitle: str) -> None:
         self.subtitle_label.setText(subtitle)
+
+    def _refresh_logo_pixmap(self) -> None:
+        if self._logo_source_pixmap is None:
+            return
+        scaled = self._logo_source_pixmap
+        theme = self.theme_manager.current_theme if self.theme_manager is not None else theme_from_name(DARK_THEME)
+        target = QColor(theme.text_primary)
+        image = scaled.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = image.pixelColor(x, y)
+                if _is_dark_neutral_logo_pixel(color):
+                    color.setRed(target.red())
+                    color.setGreen(target.green())
+                    color.setBlue(target.blue())
+                    image.setPixelColor(x, y, color)
+        self.logo.setPixmap(QPixmap.fromImage(image))
+
+
+def _is_dark_neutral_logo_pixel(color: QColor) -> bool:
+    if color.alpha() == 0:
+        return False
+    channels = (color.red(), color.green(), color.blue())
+    return max(channels) < 90 and max(channels) - min(channels) < 40
 
 
 class HoneycombBackground(QWidget):
@@ -138,9 +186,16 @@ class StatusBadge(QLabel):
         self.set_status(status)
 
     def set_status(self, status: str) -> None:
-        self.setText(status)
-        self.setProperty("statusState", status_state(status))
-        repolish(self)
+        new_state = status_state(status)
+        changed = False
+        if self.text() != status:
+            self.setText(status)
+            changed = True
+        if self.property("statusState") != new_state:
+            self.setProperty("statusState", new_state)
+            changed = True
+        if changed:
+            repolish(self)
 
 
 class ThemeToggleButton(QPushButton):
@@ -166,39 +221,69 @@ class MachineCard(QFrame):
         self.setObjectName("machineCard")
         self.setProperty("statusState", status_state(machine.calculated_status))
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.setMinimumSize(250, 165)
+        self.setMinimumSize(305, 185)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)
 
-        number = QLabel(f"Machine {machine.machine_number}")
-        number.setObjectName("machineNumber")
-        number.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(number)
+        self.number_label = QLabel()
+        self.number_label.setObjectName("machineNumber")
+        self.number_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.number_label)
 
-        name = QLabel(machine.name)
-        name.setObjectName("mutedLabel")
-        name.setWordWrap(True)
-        layout.addWidget(name)
+        self.name_label = QLabel()
+        self.name_label.setObjectName("mutedLabel")
+        self.name_label.setWordWrap(True)
+        layout.addWidget(self.name_label)
 
-        location_text = " | ".join(part for part in (machine.area, machine.cell) if part)
-        if location_text:
-            location = QLabel(location_text)
-            location.setObjectName("mutedLabel")
-            location.setWordWrap(True)
-            layout.addWidget(location)
+        self.model_label = QLabel()
+        self.model_label.setObjectName("mutedLabel")
+        self.model_label.setWordWrap(True)
+        layout.addWidget(self.model_label)
+
+        self.location_label = QLabel()
+        self.location_label.setObjectName("mutedLabel")
+        self.location_label.setWordWrap(True)
+        layout.addWidget(self.location_label)
 
         layout.addStretch(1)
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
-        footer.addWidget(StatusBadge(machine.calculated_status))
-        open_count = QLabel(f"{machine.open_issue_count} open")
-        open_count.setObjectName("openCount")
-        open_count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        footer.addWidget(open_count, 1)
+        self.status_badge = StatusBadge(machine.calculated_status)
+        footer.addWidget(self.status_badge)
+        self.open_count_label = QLabel()
+        self.open_count_label.setObjectName("openCount")
+        self.open_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        footer.addWidget(self.open_count_label, 1)
         layout.addLayout(footer)
+        self.update_machine(machine)
+
+    def update_machine(self, machine: MachineSummary) -> None:
+        self.machine = machine
+        self.number_label.setText(f"Machine {machine.machine_number}")
+        self.name_label.setText(machine.name)
+        model_text = " | ".join(
+            part
+            for part in (
+                machine.manufacturer,
+                machine.model,
+                f"IMM {machine.imm_serial}" if machine.imm_serial else "",
+            )
+            if part
+        )
+        self.model_label.setText(model_text)
+        self.model_label.setVisible(bool(model_text))
+        location_text = " | ".join(part for part in (machine.area, machine.cell) if part)
+        self.location_label.setText(location_text)
+        self.location_label.setVisible(bool(location_text))
+        self.status_badge.set_status(machine.calculated_status)
+        self.open_count_label.setText(f"{machine.open_issue_count} open")
+        new_state = status_state(machine.calculated_status)
+        if self.property("statusState") != new_state:
+            self.setProperty("statusState", new_state)
+            repolish(self)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -288,6 +373,8 @@ class IssueListToolbar(QWidget):
         parent=None,
     ):
         super().__init__(parent)
+        self.log_button: PrimaryActionButton | None = None
+        self._page_index = 0
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -304,24 +391,36 @@ class IssueListToolbar(QWidget):
         if show_log_action:
             self.log_button = PrimaryActionButton("Report Problem")
             self.log_button.setObjectName("sectionPrimaryButton")
-            self.log_button.clicked.connect(self.log_issue_requested.emit)
+            self.log_button.clicked.connect(self._handle_log_button_clicked)
             header.addWidget(self.log_button)
         layout.addLayout(header)
 
         controls = QHBoxLayout()
         controls.setSpacing(10)
         self.search = SearchBox(search_placeholder)
-        self.search.textChanged.connect(self.controls_changed.emit)
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(180)
+        self.search.textChanged.connect(self._handle_search_changed)
+        self.search_timer.timeout.connect(self.controls_changed.emit)
         self.sort = SortDropdown()
-        self.sort.currentIndexChanged.connect(self.controls_changed.emit)
+        self.sort.currentIndexChanged.connect(self._handle_filter_changed)
         self.latest = LatestCountDropdown(10)
-        self.latest.currentIndexChanged.connect(self.controls_changed.emit)
+        self.latest.currentIndexChanged.connect(self._handle_filter_changed)
         self.display_mode = QComboBox()
         self.display_mode.setObjectName("compactDropdown")
         self.display_mode.addItem("Table", "table")
         self.display_mode.addItem("Kiosk", "kiosk")
         self.display_mode.setMinimumHeight(38)
         self.display_mode.currentIndexChanged.connect(self.controls_changed.emit)
+        self.previous_page = QPushButton("Previous")
+        self.previous_page.setObjectName("tableActionButton")
+        self.previous_page.clicked.connect(self._go_previous_page)
+        self.page_label = QLabel("Page 1 of 1")
+        self.page_label.setObjectName("mutedLabel")
+        self.next_page = QPushButton("Next")
+        self.next_page.setObjectName("tableActionButton")
+        self.next_page.clicked.connect(self._go_next_page)
 
         sort_label = QLabel("Sort")
         sort_label.setObjectName("controlLabel")
@@ -337,6 +436,9 @@ class IssueListToolbar(QWidget):
         controls.addWidget(self.latest)
         controls.addWidget(mode_label)
         controls.addWidget(self.display_mode)
+        controls.addWidget(self.previous_page)
+        controls.addWidget(self.page_label)
+        controls.addWidget(self.next_page)
         layout.addLayout(controls)
 
     def update_count(self, shown: int, matched: int, total: int) -> None:
@@ -347,6 +449,56 @@ class IssueListToolbar(QWidget):
         else:
             text = f"{shown} of {matched} matched | {total} total"
         self.count_label.setText(text)
+        self._update_pagination(matched)
+
+    def offset(self) -> int:
+        return self._page_index * self.page_size()
+
+    def page_size(self) -> int:
+        value = self.latest.currentData()
+        return max(1, int(value if value is not None else 50))
+
+    def reset_page(self) -> None:
+        self._page_index = 0
+
+    def set_log_action_enabled(self, enabled: bool) -> None:
+        if self.log_button is not None:
+            self.log_button.setEnabled(enabled)
+
+    def _handle_search_changed(self) -> None:
+        self.reset_page()
+        self.search_timer.start()
+
+    def _handle_filter_changed(self) -> None:
+        self.reset_page()
+        self.controls_changed.emit()
+
+    def _go_previous_page(self) -> None:
+        if self._page_index <= 0:
+            return
+        self._page_index -= 1
+        self.controls_changed.emit()
+
+    def _go_next_page(self) -> None:
+        self._page_index += 1
+        self.controls_changed.emit()
+
+    def _update_pagination(self, matched: int) -> None:
+        page_size = self.page_size()
+        if matched <= 0:
+            self._page_index = 0
+            total_pages = 1
+        else:
+            total_pages = max(1, (matched + page_size - 1) // page_size)
+            if self._page_index >= total_pages:
+                self._page_index = total_pages - 1
+        self.page_label.setText(f"Page {self._page_index + 1} of {total_pages}")
+        self.previous_page.setEnabled(self._page_index > 0)
+        self.next_page.setEnabled(self._page_index + 1 < total_pages)
+
+    def _handle_log_button_clicked(self) -> None:
+        logger.debug("Add Issue clicked")
+        self.log_issue_requested.emit()
 
 
 class IssueListView(QFrame):
@@ -357,6 +509,7 @@ class IssueListView(QFrame):
     criteria_changed = Signal()
 
     ACTIVE_COLUMNS = (
+        "Issue ID",
         "Issue Title",
         "Status",
         "Problem Description",
@@ -367,6 +520,7 @@ class IssueListView(QFrame):
         "Actions",
     )
     RESOLVED_COLUMNS = (
+        "Issue ID",
         "Issue Title",
         "Status When Logged",
         "Problem Description",
@@ -385,6 +539,7 @@ class IssueListView(QFrame):
         self.include_resolved_fields = mode == "resolved"
         self._issues: list[Issue | ResolvedIssue] = []
         self._visible_table_issues: list[Issue | ResolvedIssue] = []
+        self._server_counts: tuple[int, int] | None = None
         self.setObjectName("listPanel")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -417,6 +572,7 @@ class IssueListView(QFrame):
         self.table.setWordWrap(False)
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.setMinimumHeight(284)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.itemDoubleClicked.connect(self._open_table_item)
@@ -432,6 +588,7 @@ class IssueListView(QFrame):
         self.card_layout.setContentsMargins(0, 0, 0, 0)
         self.card_layout.setSpacing(10)
         self.card_scroll.setWidget(self.card_host)
+        self.card_scroll.setMinimumHeight(284)
         layout.addWidget(self.card_scroll, 1)
         self.card_scroll.hide()
 
@@ -439,17 +596,30 @@ class IssueListView(QFrame):
 
     def set_issues(self, issues: list[Issue | ResolvedIssue]) -> None:
         self._issues = list(issues)
+        self._server_counts = None
+        self.toolbar.reset_page()
         self._refresh_view()
 
-    def criteria(self) -> tuple[str, str, int | None]:
+    def set_query_result(self, issues: list[Issue | ResolvedIssue], *, matched: int, total: int) -> None:
+        self._issues = list(issues)
+        self._server_counts = (max(0, int(matched)), max(0, int(total)))
+        self._refresh_view()
+
+    def criteria(self) -> tuple[str, str, int, int]:
         return (
             self.toolbar.search.text(),
             self.toolbar.sort.currentData() or DATE_DESC,
-            self.toolbar.latest.currentData(),
+            self.toolbar.page_size(),
+            self.toolbar.offset(),
         )
+
+    def set_log_action_enabled(self, enabled: bool) -> None:
+        self.toolbar.set_log_action_enabled(enabled)
 
     def _handle_controls_changed(self) -> None:
         self.criteria_changed.emit()
+        if self._server_counts is not None:
+            return
         self._refresh_view()
 
     def _configure_columns(self) -> None:
@@ -466,11 +636,11 @@ class IssueListView(QFrame):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
 
         if self.include_resolved_fields:
-            widths = (170, 142, 220, 220, 110, 110, 142, 92, 100, 94)
-            stretch_columns = (2, 3)
+            widths = (150, 180, 148, 280, 280, 118, 118, 146, 100, 116, 110)
+            stretch_columns = (3, 4)
         else:
-            widths = (190, 118, 260, 112, 142, 78, 100, 154)
-            stretch_columns = (2,)
+            widths = (150, 200, 126, 340, 120, 146, 86, 120, 180)
+            stretch_columns = (3,)
 
         for column, width in enumerate(widths):
             self.table.setColumnWidth(column, width)
@@ -478,22 +648,29 @@ class IssueListView(QFrame):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
 
     def _refresh_view(self) -> None:
-        query, sort_key, latest_limit = self.criteria()
+        query, sort_key, latest_limit, offset = self.criteria()
 
-        matched = filter_issues(
-            self._issues,
-            query=query,
-            include_resolved_fields=self.include_resolved_fields,
-        )
-        visible = prepare_issue_rows(
-            self._issues,
-            query=query,
-            sort_key=sort_key,
-            latest_limit=latest_limit,
-            include_resolved_fields=self.include_resolved_fields,
-        )
+        if self._server_counts is None:
+            matched = filter_issues(
+                self._issues,
+                query=query,
+                include_resolved_fields=self.include_resolved_fields,
+            )
+            ordered = prepare_issue_rows(
+                self._issues,
+                query=query,
+                sort_key=sort_key,
+                latest_limit=None,
+                include_resolved_fields=self.include_resolved_fields,
+            )
+            visible = ordered[offset : offset + latest_limit]
+            matched_count = len(matched)
+            total_count = len(self._issues)
+        else:
+            visible = list(self._issues)
+            matched_count, total_count = self._server_counts
 
-        self.toolbar.update_count(len(visible), len(matched), len(self._issues))
+        self.toolbar.update_count(len(visible), matched_count, total_count)
         self._clear_cards()
         self.table.setRowCount(0)
         self._visible_table_issues = []
@@ -513,16 +690,22 @@ class IssueListView(QFrame):
         self._populate_table(visible)
 
     def _populate_table(self, visible: list[Issue | ResolvedIssue]) -> None:
-        self.table.setRowCount(0)
-        self._visible_table_issues = visible
-        self.table.setRowCount(len(visible))
-        for row, issue in enumerate(visible):
-            if self.include_resolved_fields and isinstance(issue, ResolvedIssue):
-                self._populate_resolved_row(row, issue)
-            elif isinstance(issue, Issue):
-                self._populate_active_row(row, issue)
-            self.table.setRowHeight(row, 54)
-        self.table.clearSelection()
+        self.table.setUpdatesEnabled(False)
+        self.table.blockSignals(True)
+        try:
+            self.table.setRowCount(0)
+            self._visible_table_issues = visible
+            self.table.setRowCount(len(visible))
+            for row, issue in enumerate(visible):
+                if self.include_resolved_fields and isinstance(issue, ResolvedIssue):
+                    self._populate_resolved_row(row, issue)
+                elif isinstance(issue, Issue):
+                    self._populate_active_row(row, issue)
+                self.table.setRowHeight(row, 62)
+            self.table.clearSelection()
+        finally:
+            self.table.blockSignals(False)
+            self.table.setUpdatesEnabled(True)
 
     def _populate_cards(self, visible: list[Issue | ResolvedIssue]) -> None:
         for issue in visible:
@@ -539,13 +722,14 @@ class IssueListView(QFrame):
         self.card_layout.addStretch(1)
 
     def _populate_active_row(self, row: int, issue: Issue) -> None:
-        self.table.setItem(row, 0, self._item(preview_text(issue.title, 64), issue.title))
-        self.table.setCellWidget(row, 1, self._centered_widget(StatusBadge(issue.severity)))
-        self.table.setItem(row, 2, self._item(preview_text(issue.description, 92), issue.description))
-        self.table.setItem(row, 3, self._item(issue.logged_by))
-        self.table.setItem(row, 4, self._item(format_timestamp(issue.created_at), issue.created_at))
-        self.table.setItem(row, 5, self._item(format_duration_between(issue.created_at)))
-        self.table.setItem(row, 6, self._item(issue.category or "-"))
+        self.table.setItem(row, 0, self._item(display_issue_id(issue)))
+        self.table.setItem(row, 1, self._item(preview_text(issue.title, 64), issue.title))
+        self.table.setCellWidget(row, 2, self._centered_widget(StatusBadge(issue.severity)))
+        self.table.setItem(row, 3, self._item(preview_text(issue.description, 92), issue.description))
+        self.table.setItem(row, 4, self._item(issue.logged_by))
+        self.table.setItem(row, 5, self._item(format_timestamp(issue.created_at), issue.created_at))
+        self.table.setItem(row, 6, self._item(format_duration_between(issue.created_at)))
+        self.table.setItem(row, 7, self._item(issue.category or "-"))
 
         view_button = QPushButton("Open")
         view_button.setObjectName("tableActionButton")
@@ -553,22 +737,23 @@ class IssueListView(QFrame):
         resolve_button = QPushButton("Resolve")
         resolve_button.setObjectName("tableActionButton")
         resolve_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self.resolve_requested.emit(issue_id))
-        self.table.setCellWidget(row, 7, self._action_widget(view_button, resolve_button))
+        self.table.setCellWidget(row, 8, self._action_widget(view_button, resolve_button))
 
     def _populate_resolved_row(self, row: int, issue: ResolvedIssue) -> None:
-        self.table.setItem(row, 0, self._item(preview_text(issue.title, 58), issue.title))
-        self.table.setCellWidget(row, 1, self._centered_widget(StatusBadge(issue.severity)))
-        self.table.setItem(row, 2, self._item(preview_text(issue.description, 86), issue.description))
-        self.table.setItem(row, 3, self._item(preview_text(issue.solution, 86), issue.solution))
-        self.table.setItem(row, 4, self._item(issue.logged_by))
-        self.table.setItem(row, 5, self._item(issue.resolved_by or "-"))
-        self.table.setItem(row, 6, self._item(format_timestamp(issue.resolved_at), issue.resolved_at))
-        self.table.setItem(row, 7, self._item(format_duration_between(issue.created_at, issue.resolved_at)))
-        self.table.setItem(row, 8, self._item(issue.category or "-"))
+        self.table.setItem(row, 0, self._item(display_issue_id(issue)))
+        self.table.setItem(row, 1, self._item(preview_text(issue.title, 58), issue.title))
+        self.table.setCellWidget(row, 2, self._centered_widget(StatusBadge(issue.severity)))
+        self.table.setItem(row, 3, self._item(preview_text(issue.description, 86), issue.description))
+        self.table.setItem(row, 4, self._item(preview_text(issue.solution, 86), issue.solution))
+        self.table.setItem(row, 5, self._item(issue.logged_by))
+        self.table.setItem(row, 6, self._item(issue.resolved_by or "-"))
+        self.table.setItem(row, 7, self._item(format_timestamp(issue.resolved_at), issue.resolved_at))
+        self.table.setItem(row, 8, self._item(format_duration_between(issue.created_at, issue.resolved_at)))
+        self.table.setItem(row, 9, self._item(issue.category or "-"))
         view_button = QPushButton("Open")
         view_button.setObjectName("tableActionButton")
         view_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self._emit_open("resolved", issue_id))
-        self.table.setCellWidget(row, 9, self._centered_widget(view_button))
+        self.table.setCellWidget(row, 10, self._centered_widget(view_button))
 
     def _open_table_item(self, item: QTableWidgetItem) -> None:
         row = item.row()
@@ -588,7 +773,7 @@ class IssueListView(QFrame):
         if has_query:
             return "No issues match the current search."
         if self.include_resolved_fields:
-            return "No recently resolved issues."
+            return "No resolved issues yet."
         return "No active issues."
 
     @staticmethod
@@ -616,8 +801,8 @@ class IssueListView(QFrame):
         host = QWidget()
         host.setObjectName("transparentHost")
         layout = QHBoxLayout(host)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(5)
+        layout.setContentsMargins(6, 5, 6, 5)
+        layout.setSpacing(8)
         layout.addStretch(1)
         for widget in widgets:
             layout.addWidget(widget)
@@ -658,9 +843,9 @@ class IssueCard(QFrame):
         description.setWordWrap(True)
         layout.addWidget(description)
 
-        meta_parts = [f"Logged by {issue.logged_by}", issue.created_at]
+        meta_parts = [display_issue_id(issue), f"Machine {issue.machine_number}", issue.severity, f"Logged by {issue.logged_by}", issue.created_at]
         if issue.category:
-            meta_parts.insert(1, issue.category)
+            meta_parts.insert(3, issue.category)
         meta = QLabel(" | ".join(meta_parts))
         meta.setObjectName("mutedLabel")
         meta.setWordWrap(True)
@@ -704,10 +889,10 @@ class ResolvedIssueCard(QFrame):
         archive_note = ""
         if issue.archive_status == "pending":
             archive_note = " | Archive pending"
-        elif issue.archive_status == "archive_error":
+        elif issue.archive_status in {"failed", "archive_error"}:
             archive_note = " | Archive needs attention"
 
-        meta = QLabel(f"Resolved {issue.resolved_at} | {issue.severity}{archive_note}")
+        meta = QLabel(f"{display_issue_id(issue)} | Machine {issue.machine_number} | Resolved {issue.resolved_at} | {issue.severity}{archive_note}")
         meta.setObjectName("mutedLabel")
         meta.setWordWrap(True)
         layout.addWidget(meta)

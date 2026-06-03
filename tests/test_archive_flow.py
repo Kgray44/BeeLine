@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
@@ -23,10 +24,10 @@ from beeline_issue_tracker.data.archive import (
     ExcelArchive,
     refresh_archive_workbook,
 )
-from beeline_issue_tracker.data.archive_worker import ArchiveIssueTask
+from beeline_issue_tracker.data.archive_worker import ArchiveIssueTask, ArchiveRetryTask
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
-from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, ResolvedIssue
+from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, ResolvedIssue, display_issue_id
 
 
 DEMO_MACHINES = (
@@ -81,13 +82,15 @@ class ArchiveFlowTest(unittest.TestCase):
         self.assertEqual(HEADERS, tuple(cell.value for cell in worksheet[1][: len(HEADERS)]))
         self.assertEqual(resolved.id, worksheet["A2"].value)
         self.assertEqual(issue.id, worksheet["B2"].value)
-        self.assertEqual(self.machine_number, worksheet["C2"].value)
-        self.assertEqual("Nozzle temp drift", worksheet["E2"].value)
-        self.assertEqual("Adjusted PID settings and verified stable temperature.", worksheet["L2"].value)
+        self.assertEqual(display_issue_id(resolved), worksheet["C2"].value)
+        self.assertEqual(self.machine_number, worksheet["D2"].value)
+        self.assertEqual("Nozzle temp drift", worksheet["F2"].value)
+        self.assertEqual("Adjusted PID settings and verified stable temperature.", worksheet["M2"].value)
 
         grouped = workbook[GROUPED_SHEET]
         self.assertEqual(GROUPED_HEADERS, tuple(cell.value for cell in grouped[3][: len(GROUPED_HEADERS)]))
         self.assertTrue(any(grouped.cell(row=row, column=1).value for row in range(4, grouped.max_row + 1)))
+        self.assertEqual(display_issue_id(resolved), grouped.cell(row=5, column=2).value)
         self.assertEqual(1, grouped.row_dimensions[5].outlineLevel)
 
     def test_archive_append_adds_rows_without_overwriting_existing_rows(self) -> None:
@@ -144,8 +147,8 @@ class ArchiveFlowTest(unittest.TestCase):
 
         june_2_row = date_headers[0][0]
         june_1_row = date_headers[1][0]
-        self.assertEqual(3, grouped.cell(row=june_2_row + 1, column=2).value)
-        self.assertEqual([2, 1], [grouped.cell(row=june_1_row + offset, column=2).value for offset in (1, 2)])
+        self.assertEqual("103", grouped.cell(row=june_2_row + 1, column=2).value)
+        self.assertEqual(["102", "101"], [grouped.cell(row=june_1_row + offset, column=2).value for offset in (1, 2)])
         self.assertEqual(1, grouped.row_dimensions[june_2_row + 1].outlineLevel)
         self.assertEqual(1, grouped.row_dimensions[june_1_row + 1].outlineLevel)
         self.assertEqual(1, grouped.row_dimensions[june_1_row + 2].outlineLevel)
@@ -217,8 +220,46 @@ class ArchiveFlowTest(unittest.TestCase):
         self.assertEqual([], self.repository.list_active_issues(self.machine_number))
         recent = self.repository.list_recent_resolved_issues(self.machine_number)
         self.assertEqual(1, len(recent))
-        self.assertEqual("archive_error", recent[0].archive_status)
+        self.assertEqual("failed", recent[0].archive_status)
         self.assertTrue(recent[0].archive_error)
+
+    def test_cache_trimming_preserves_pending_and_failed_archive_writes(self) -> None:
+        old_archived = self._resolve_and_archive("Old archived")
+        newest_archived = self._resolve_and_archive("Newest archived")
+        pending = self._resolve_without_archive("Old pending")
+        failed = self._resolve_without_archive("Old failed")
+        self.repository.mark_archive_result(failed.id, success=False, error="workbook unavailable")
+        self._set_resolved_at(old_archived.id, "2025-01-01T08:00:00+00:00")
+        self._set_resolved_at(newest_archived.id, "2026-05-01T08:00:00+00:00")
+        self._set_resolved_at(pending.id, "2025-01-02T08:00:00+00:00")
+        self._set_resolved_at(failed.id, "2025-01-03T08:00:00+00:00")
+
+        deleted = self.repository.trim_resolved_issue_cache(
+            keep_days=30,
+            keep_minimum=1,
+            keep_per_machine_minimum=0,
+            now=datetime(2026, 6, 3, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(1, deleted)
+        self.assertIsNone(self.repository.get_resolved_issue(old_archived.id))
+        self.assertIsNotNone(self.repository.get_resolved_issue(newest_archived.id))
+        self.assertEqual("pending", self.repository.get_resolved_issue(pending.id).archive_status)
+        self.assertEqual("failed", self.repository.get_resolved_issue(failed.id).archive_status)
+
+    def test_retry_failed_archive_writes_appends_excel_and_marks_archived(self) -> None:
+        failed = self._resolve_without_archive("Retry archived")
+        self.repository.mark_archive_result(failed.id, success=False, error="locked")
+
+        ArchiveRetryTask(self.archive_path, self.repository).run()
+
+        retried = self.repository.get_resolved_issue(failed.id)
+        self.assertIsNotNone(retried)
+        assert retried is not None
+        self.assertEqual("archived", retried.archive_status)
+        workbook = load_workbook(self.archive_path, data_only=True)
+        ids = [row[0] for row in workbook[ARCHIVE_SHEET].iter_rows(min_row=2, values_only=True)]
+        self.assertIn(failed.id, ids)
 
     def _resolve_and_archive(self, title: str):
         issue = self.repository.log_issue(
@@ -237,6 +278,37 @@ class ArchiveFlowTest(unittest.TestCase):
         ExcelArchive(self.archive_path).append_resolved_issue(resolved)
         self.repository.mark_archive_result(resolved.id, success=True)
         return resolved
+
+    def _resolve_without_archive(self, title: str):
+        issue = self.repository.log_issue(
+            machine_number=self.machine_number,
+            logged_by="Archive Test",
+            title=title,
+            description=f"{title} description.",
+            severity=NON_CRITICAL,
+            category="Test",
+        )
+        return self.repository.resolve_issue(
+            issue.id,
+            solution=f"{title} fix.",
+            resolved_by="Archive Test",
+        )
+
+    def _set_resolved_at(self, resolved_id: int, resolved_at: str) -> None:
+        with self.repository_connection() as conn:
+            conn.execute(
+                """
+                UPDATE resolved_issues_cache
+                SET resolved_at = ?
+                WHERE id = ?
+                """,
+                (resolved_at, resolved_id),
+            )
+
+    def repository_connection(self):
+        from beeline_issue_tracker.data.database import connect
+
+        return connect(self.repository.db_path)
 
     def _resolved_issue(
         self,

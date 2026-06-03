@@ -58,7 +58,50 @@ class SecurityTest(unittest.TestCase):
             self.assertFalse(config.verify_pin_for_roles("1357", ("technician", "admin")))
             self.assertTrue(config.verify_pin_for_roles("2468", ("technician", "admin")))
 
+    def test_runtime_config_loads_viewer_alias_ui_defaults_and_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "beeline_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "roles": {
+                            "operator": {"enabled": True, "pin_hash": ""},
+                        },
+                        "ui": {
+                            "category_options": ["Automation", "Machine", "Maintenance", "Automation"],
+                            "default_dashboard_filter": "resolved",
+                            "default_issue_display_count": 25,
+                        },
+                        "machines": [
+                            {
+                                "machine_number": "S01",
+                                "name": "Engel e-victory 80/28",
+                                "area": "Royalton P7",
+                                "cell": "Silicones",
+                                "asset_tag": "IMM Serial 166303",
+                                "display_order": 10,
+                                "imm_make": "Engel",
+                                "imm_model": "e-victory 80/28",
+                                "imm_serial": "166303",
+                                "robot_make": "Fanuc",
+                                "robot_model": "LR Mate 200iC/5C",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_runtime_config(config_path)
+
+            self.assertTrue(config.roles["viewer"].enabled)
+            self.assertEqual(("Automation", "Machine", "Maintenance"), config.ui.category_options)
+            self.assertEqual("resolved", config.ui.default_dashboard_filter)
+            self.assertEqual(25, config.ui.default_issue_display_count)
+            self.assertEqual("Engel", config.machines[0].manufacturer)
+            self.assertEqual("Fanuc", config.machines[0].robot_type)
+
 
 if __name__ == "__main__":
     unittest.main()
-

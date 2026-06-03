@@ -14,6 +14,9 @@ from beeline_issue_tracker.domain import Issue, ResolvedIssue
 from beeline_issue_tracker.ui.issue_list_model import (
     DATE_ASC,
     DATE_DESC,
+    ISSUE_ID_ASC,
+    ISSUE_ID_DESC,
+    LATEST_OPTIONS,
     TITLE_ASC,
     TITLE_DESC,
     format_duration_between,
@@ -31,6 +34,7 @@ def active_issue(
     severity: str = "Non-Critical",
     category: str = "",
     machine_number: str = "M-101",
+    public_issue_id: str = "",
 ) -> Issue:
     return Issue(
         id=issue_id,
@@ -42,6 +46,7 @@ def active_issue(
         category=category,
         created_at=created_at,
         updated_at=created_at,
+        public_issue_id=public_issue_id,
     )
 
 
@@ -57,6 +62,7 @@ def resolved_issue(
     severity: str = "Non-Critical",
     category: str = "",
     machine_number: str = "M-101",
+    public_issue_id: str = "",
 ) -> ResolvedIssue:
     return ResolvedIssue(
         id=issue_id,
@@ -73,6 +79,7 @@ def resolved_issue(
         solution=solution,
         archive_status="archived",
         archive_error="",
+        public_issue_id=public_issue_id,
     )
 
 
@@ -128,6 +135,21 @@ class IssueListModelTest(unittest.TestCase):
         self.assertEqual([2, 1], [issue.id for issue in ascending])
         self.assertEqual([1, 2], [issue.id for issue in descending])
 
+    def test_issue_id_search_and_sorting_uses_public_id(self) -> None:
+        issues = [
+            active_issue(1, title="First", created_at="2026-06-03T13:00:00+00:00", public_issue_id="ISS-20260603-002"),
+            active_issue(2, title="Second", created_at="2026-06-03T14:00:00+00:00", public_issue_id="ISS-20260603-001"),
+            active_issue(3, title="Third", created_at="2026-06-04T08:00:00+00:00", public_issue_id="ISS-20260604-001"),
+        ]
+
+        matched = prepare_issue_rows(issues, query="20260603-001", sort_key=DATE_DESC, latest_limit=None)
+        ascending = prepare_issue_rows(issues, sort_key=ISSUE_ID_ASC, latest_limit=None)
+        descending = prepare_issue_rows(issues, sort_key=ISSUE_ID_DESC, latest_limit=None)
+
+        self.assertEqual([2], [issue.id for issue in matched])
+        self.assertEqual([2, 1, 3], [issue.id for issue in ascending])
+        self.assertEqual([3, 1, 2], [issue.id for issue in descending])
+
     def test_resolved_search_and_date_sort_use_resolved_fields(self) -> None:
         issues = [
             resolved_issue(
@@ -177,6 +199,10 @@ class IssueListModelTest(unittest.TestCase):
             "2h 15m",
             format_duration_between("2026-06-03T10:00:00+00:00", "2026-06-03T12:15:00+00:00"),
         )
+
+    def test_latest_options_are_bounded(self) -> None:
+        self.assertNotIn(None, [value for _label, value in LATEST_OPTIONS])
+        self.assertLessEqual(max(value for _label, value in LATEST_OPTIONS), 100)
 
 
 if __name__ == "__main__":

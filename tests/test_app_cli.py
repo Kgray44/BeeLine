@@ -24,11 +24,15 @@ class AppCliTest(unittest.TestCase):
             env = self._env(Path(tmp))
             with patch.dict(os.environ, env, clear=False):
                 create_templates(AppPaths.from_environment(), force=True)
-                with patch("beeline_issue_tracker.app.refresh_archive_workbook") as refresh:
+                with (
+                    patch("beeline_issue_tracker.app.refresh_archive_workbook") as refresh,
+                    patch("beeline_issue_tracker.app.inspect_archive") as inspect_archive,
+                ):
                     result = beeline_app.main(["--check"])
 
         self.assertEqual(0, result)
         refresh.assert_not_called()
+        inspect_archive.assert_not_called()
 
     def test_repair_archive_forces_archive_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -56,4 +60,3 @@ class AppCliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

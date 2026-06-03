@@ -9,7 +9,7 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, NO_ISSUES, UNKNOWN_ERROR, ResolvedIssue
+from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, NO_ISSUES, UNKNOWN_ERROR, ResolvedIssue, display_issue_id
 
 
 ARCHIVE_SHEET = "Resolved_Issues"
@@ -18,6 +18,7 @@ INFO_SHEET = "Archive_Info"
 HEADERS = (
     "cache_id",
     "original_issue_id",
+    "issue_id",
     "machine_number",
     "logged_by",
     "title",
@@ -29,6 +30,7 @@ HEADERS = (
     "resolved_by",
     "solution",
 )
+LEGACY_HEADERS = tuple(header for header in HEADERS if header != "issue_id")
 GROUPED_HEADERS = (
     "Resolved Time",
     "Issue ID",
@@ -161,6 +163,7 @@ class ExcelArchive:
             (
                 issue.id,
                 issue.original_issue_id,
+                display_issue_id(issue),
                 issue.machine_number,
                 issue.logged_by,
                 issue.title,
@@ -331,7 +334,7 @@ class ExcelArchive:
         created_dt = _parse_dt(record.get("created_at_utc"))
         values = (
             _time_label(resolved_dt, record.get("resolved_at_utc")),
-            record.get("cache_id"),
+            record.get("issue_id") or record.get("original_issue_id") or record.get("cache_id"),
             record.get("machine_number"),
             record.get("severity"),
             record.get("title"),
@@ -372,6 +375,15 @@ class ExcelArchive:
             ExcelArchive._style_raw_sheet(worksheet)
             return
         if tuple(first_row_values) != HEADERS:
+            legacy_values = tuple(cell.value for cell in worksheet[1][: len(LEGACY_HEADERS)])
+            if legacy_values == LEGACY_HEADERS:
+                worksheet.insert_cols(3)
+                worksheet.cell(row=1, column=3, value="issue_id")
+                for row in range(2, worksheet.max_row + 1):
+                    original_issue_id = worksheet.cell(row=row, column=2).value
+                    worksheet.cell(row=row, column=3, value=str(original_issue_id or ""))
+                ExcelArchive._style_raw_sheet(worksheet)
+                return
             raise ValueError(
                 f"Archive sheet {ARCHIVE_SHEET!r} has unexpected headers. "
                 "Refusing to append to a workbook with a different layout."
@@ -381,20 +393,21 @@ class ExcelArchive:
     @staticmethod
     def _style_raw_sheet(worksheet) -> None:
         worksheet.freeze_panes = "A2"
-        worksheet.auto_filter.ref = f"A1:L{max(worksheet.max_row, 1)}"
+        worksheet.auto_filter.ref = f"A1:M{max(worksheet.max_row, 1)}"
         widths = {
             "A": 12,
             "B": 18,
-            "C": 16,
-            "D": 18,
-            "E": 32,
-            "F": 48,
-            "G": 16,
-            "H": 18,
-            "I": 24,
+            "C": 18,
+            "D": 16,
+            "E": 18,
+            "F": 32,
+            "G": 48,
+            "H": 16,
+            "I": 18,
             "J": 24,
-            "K": 18,
-            "L": 48,
+            "K": 24,
+            "L": 18,
+            "M": 48,
         }
         for column, width in widths.items():
             worksheet.column_dimensions[column].width = width
@@ -411,9 +424,9 @@ class ExcelArchive:
                 cell = worksheet.cell(row=row, column=column)
                 cell.fill = PatternFill(fill_type="solid", fgColor=row_fill)
                 cell.border = _thin_border()
-                cell.alignment = Alignment(vertical="top", wrap_text=column in {5, 6, 12})
+                cell.alignment = Alignment(vertical="top", wrap_text=column in {6, 7, 13})
                 cell.font = Font(color=TEXT_DARK)
-            status_cell = worksheet.cell(row=row, column=7)
+            status_cell = worksheet.cell(row=row, column=8)
             status_fill, status_text = _status_style(str(status_cell.value or UNKNOWN_ERROR))
             status_cell.fill = PatternFill(fill_type="solid", fgColor=status_fill)
             status_cell.font = Font(bold=True, color=status_text)
@@ -503,10 +516,14 @@ def inspect_archive(archive_path: Path) -> ArchiveInspection:
 
 def _raw_records(worksheet) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    for row in worksheet.iter_rows(min_row=2, max_col=len(HEADERS), values_only=True):
+    headers = _raw_headers(worksheet)
+    for row in worksheet.iter_rows(min_row=2, max_col=len(headers), values_only=True):
         if not any(value is not None for value in row):
             continue
-        records.append(dict(zip(HEADERS, row)))
+        record = dict(zip(headers, row))
+        if "issue_id" not in record:
+            record["issue_id"] = str(record.get("original_issue_id") or "")
+        records.append(record)
     return records
 
 
@@ -516,6 +533,16 @@ def _raw_record_count(worksheet) -> int:
         if any(value is not None for value in row):
             count += 1
     return count
+
+
+def _raw_headers(worksheet) -> tuple[str, ...]:
+    first_row_values = tuple(cell.value for cell in worksheet[1][: len(HEADERS)])
+    if first_row_values == HEADERS:
+        return HEADERS
+    legacy_values = tuple(cell.value for cell in worksheet[1][: len(LEGACY_HEADERS)])
+    if legacy_values == LEGACY_HEADERS:
+        return LEGACY_HEADERS
+    return HEADERS
 
 
 def _group_records_by_resolved_date(records: list[dict[str, Any]]):
@@ -608,7 +635,7 @@ def _status_style(status: str) -> tuple[str, str]:
 def _set_grouped_widths(worksheet) -> None:
     widths = {
         "A": 15,
-        "B": 10,
+        "B": 18,
         "C": 14,
         "D": 18,
         "E": 28,

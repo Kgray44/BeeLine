@@ -10,6 +10,7 @@ from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, NO_ISSUES, UNK
 
 DARK_THEME = "dark"
 LIGHT_THEME = "light"
+SYSTEM_THEME = "system"
 DEFAULT_THEME = DARK_THEME
 
 
@@ -72,7 +73,7 @@ THEMES: dict[str, ThemeTokens] = {
         status_no_issues_text="#07190f",
         status_unknown="#8a929a",
         status_unknown_text="#101418",
-        honeycomb_alpha=12,
+        honeycomb_alpha=24,
     ),
     LIGHT_THEME: ThemeTokens(
         name=LIGHT_THEME,
@@ -101,7 +102,7 @@ THEMES: dict[str, ThemeTokens] = {
         status_no_issues_text="#f4fff8",
         status_unknown="#7f878c",
         status_unknown_text="#ffffff",
-        honeycomb_alpha=20,
+        honeycomb_alpha=40,
     ),
 }
 
@@ -123,7 +124,7 @@ class ThemeManager(QObject):
         super().__init__(parent)
         self.settings = settings or QSettings()
         stored_theme = str(self.settings.value(self.SETTINGS_KEY, DEFAULT_THEME))
-        self._theme_name = stored_theme if stored_theme in THEMES else DEFAULT_THEME
+        self._theme_name = stored_theme if stored_theme in (*THEMES.keys(), SYSTEM_THEME) else DEFAULT_THEME
 
     @property
     def current_theme_name(self) -> str:
@@ -131,10 +132,10 @@ class ThemeManager(QObject):
 
     @property
     def current_theme(self) -> ThemeTokens:
-        return THEMES[self._theme_name]
+        return THEMES[self._effective_theme_name()]
 
     def set_theme(self, theme_name: str) -> None:
-        if theme_name not in THEMES:
+        if theme_name not in (*THEMES.keys(), SYSTEM_THEME):
             raise ValueError(f"Unknown BeeLine theme: {theme_name}")
         if theme_name == self._theme_name:
             return
@@ -144,10 +145,15 @@ class ThemeManager(QObject):
         self.theme_changed.emit(theme_name)
 
     def toggle_theme(self) -> None:
-        self.set_theme(LIGHT_THEME if self._theme_name == DARK_THEME else DARK_THEME)
+        self.set_theme(LIGHT_THEME if self._effective_theme_name() == DARK_THEME else DARK_THEME)
 
     def build_stylesheet(self) -> str:
         return build_stylesheet(self.current_theme)
+
+    def _effective_theme_name(self) -> str:
+        if self._theme_name != SYSTEM_THEME:
+            return self._theme_name
+        return DARK_THEME
 
 
 def theme_from_name(theme_name: str | None) -> ThemeTokens:
@@ -219,19 +225,32 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
     }}
 
     QLabel#brandText {{
-        color: {tokens.primary_button_text};
-        background-color: {tokens.accent};
-        border: 1px solid {tokens.accent};
-        border-radius: 6px;
+        color: {tokens.text_primary};
+        background: transparent;
+        border: 0;
+        border-radius: 0;
         font-size: 17px;
         font-weight: 800;
-        padding: 8px;
+        padding: 0;
+    }}
+
+    QLabel#brandText[hasLogo="true"] {{
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
     }}
 
     QLabel#sectionTitle {{
         color: {tokens.accent};
         font-size: 20px;
         font-weight: 700;
+    }}
+
+    QLabel#smallSectionTitle {{
+        color: {tokens.accent};
+        font-size: 16px;
+        font-weight: 750;
     }}
 
     QLabel#machineNumber {{
@@ -329,6 +348,20 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         padding: 9px 14px;
     }}
 
+    QPushButton#loginButton {{
+        background-color: transparent;
+        border-color: {tokens.border};
+        color: {tokens.text_secondary};
+        padding: 5px 10px;
+        font-size: 13px;
+    }}
+
+    QLabel#roleBadge {{
+        color: {tokens.text_secondary};
+        font-size: 13px;
+        font-weight: 650;
+    }}
+
     QPushButton#statusLineDownButton,
     QPushButton#statusNonCriticalButton {{
         min-height: 58px;
@@ -351,18 +384,68 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
     QFrame#machineCard,
     QFrame#infoPanel,
     QFrame#issueCard,
+    QFrame#searchResultCard,
     QFrame#formPanel,
     QFrame#machineHeader,
-    QFrame#listPanel {{
+    QFrame#listPanel,
+    QFrame#summaryHero {{
         background-color: {tokens.panel};
         border: 1px solid {tokens.border};
         border-radius: 8px;
     }}
 
-    QFrame#metricPill {{
+    QFrame#metricPill,
+    QFrame#factCard,
+    QFrame#riskCard,
+    QFrame#riskReasonRow {{
         background-color: {tokens.background_subtle};
         border: 1px solid {tokens.border};
         border-radius: 8px;
+    }}
+
+    QFrame#riskCard {{
+        border-color: {tokens.accent_muted};
+    }}
+
+    QFrame#riskReasonRow[impactState="high"] {{
+        border-left: 5px solid {tokens.status_line_down};
+    }}
+
+    QFrame#riskReasonRow[impactState="medium"] {{
+        border-left: 5px solid {tokens.status_non_critical};
+    }}
+
+    QFrame#riskReasonRow[impactState="low"] {{
+        border-left: 5px solid {tokens.status_unknown};
+    }}
+
+    QLabel#largeMetricValue {{
+        color: {tokens.text_primary};
+        font-size: 24px;
+        font-weight: 850;
+    }}
+
+    QLabel#reasonScoreBadge {{
+        border-radius: 6px;
+        color: {tokens.text_primary};
+        font-size: 15px;
+        font-weight: 850;
+        padding: 4px 8px;
+    }}
+
+    QLabel#reasonScoreBadge[impactState="high"] {{
+        background-color: {tokens.status_line_down};
+        color: {tokens.status_line_down_text};
+    }}
+
+    QLabel#reasonScoreBadge[impactState="medium"] {{
+        background-color: {tokens.status_non_critical};
+        color: {tokens.status_non_critical_text};
+    }}
+
+    QLabel#reasonScoreBadge[impactState="low"] {{
+        background-color: {tokens.status_unknown};
+        color: {tokens.status_unknown_text};
     }}
 
     QFrame#machineCard:hover {{
@@ -372,30 +455,42 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
 
     QFrame#machineCard[statusState="line_down"],
     QFrame#machineHeader[statusState="line_down"],
+    QFrame#summaryHero[statusState="line_down"],
     QFrame#issueCard[statusState="line_down"] {{
         border-left: 5px solid {tokens.status_line_down};
     }}
 
     QFrame#machineCard[statusState="non_critical"],
     QFrame#machineHeader[statusState="non_critical"],
+    QFrame#summaryHero[statusState="non_critical"],
     QFrame#issueCard[statusState="non_critical"] {{
         border-left: 5px solid {tokens.status_non_critical};
     }}
 
     QFrame#machineCard[statusState="no_issues"],
     QFrame#machineHeader[statusState="no_issues"],
+    QFrame#summaryHero[statusState="no_issues"],
     QFrame#issueCard[statusState="no_issues"] {{
         border-left: 5px solid {tokens.status_no_issues};
     }}
 
     QFrame#machineCard[statusState="unknown"],
     QFrame#machineHeader[statusState="unknown"],
+    QFrame#summaryHero[statusState="unknown"],
     QFrame#issueCard[statusState="unknown"] {{
         border-left: 5px solid {tokens.status_unknown};
     }}
 
     QFrame#issueCard[archiveState="resolved"] {{
         border-left: 5px solid {tokens.accent};
+    }}
+
+    QFrame#searchResultCard[state="open"] {{
+        border-left: 5px solid {tokens.status_non_critical};
+    }}
+
+    QFrame#searchResultCard[state="resolved"] {{
+        border-left: 5px solid {tokens.status_no_issues};
     }}
 
     QLabel#statusBadge {{

@@ -19,7 +19,7 @@ for path in (APP_DIR, PROJECT_ROOT):
 from beeline_issue_tracker.data.archive import ARCHIVE_SHEET, GROUPED_SHEET, HEADERS
 
 
-RUNTIME_DIRS = {"data", "archive", "backups", "logs", "config"}
+RUNTIME_DIRS = {"data", "archive", "backups", "logs", "config", "exports"}
 SAFE_RUNTIME_PLACEHOLDERS = {
     "data/.gitkeep",
     "data/README.md",
@@ -42,6 +42,7 @@ ALLOWED_BINARY_TEMPLATES = {
     "templates/beeline_archive.template.xlsx",
 }
 ALLOWED_MEDIA_PLACEHOLDERS = {
+    "assets/branding/nolato_logo.png",
     "assets/branding/nolato_logo_placeholder.png",
 }
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"}

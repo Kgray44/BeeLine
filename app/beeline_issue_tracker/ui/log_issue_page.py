@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QFrame,
     QFormLayout,
     QHBoxLayout,
@@ -19,18 +20,26 @@ from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.repository import IssueRepository
 from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL
 from beeline_issue_tracker.ui.theme import ThemeManager
-from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground, ThemeToggleButton
+from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground
 
 
 class LogIssuePage(HoneycombBackground):
     cancel_requested = Signal()
     save_requested = Signal(dict)
 
-    def __init__(self, repository: IssueRepository, theme_manager: ThemeManager, paths: AppPaths, parent=None):
+    def __init__(
+        self,
+        repository: IssueRepository,
+        theme_manager: ThemeManager,
+        paths: AppPaths,
+        category_options: tuple[str, ...] = ("Automation", "Machine", "Maintenance"),
+        parent=None,
+    ):
         super().__init__(theme_manager, parent)
         self.repository = repository
         self.theme_manager = theme_manager
         self.paths = paths
+        self.category_options = tuple(category_options) or ("Automation", "Machine", "Maintenance")
         self.machine_number_value = ""
 
         page = QVBoxLayout(self)
@@ -38,9 +47,8 @@ class LogIssuePage(HoneycombBackground):
         page.setSpacing(18)
 
         header = QHBoxLayout()
-        self.brand_header = BrandHeader("Report Problem", "", paths.logo_path())
+        self.brand_header = BrandHeader("Report Problem", "", paths.logo_path(), theme_manager)
         header.addWidget(self.brand_header, 1)
-        header.addWidget(ThemeToggleButton(theme_manager))
         page.addLayout(header)
 
         panel = QFrame()
@@ -88,15 +96,27 @@ class LogIssuePage(HoneycombBackground):
         self.description = QTextEdit()
         self.description.setMinimumHeight(150)
         self.description.setPlaceholderText("What is happening?")
-        self.category = QLineEdit()
+        self.category = QComboBox()
         self.category.setMinimumHeight(44)
-        self.category.setPlaceholderText("Optional")
+        for category in self.category_options:
+            self.category.addItem(category, category)
+        self.category.addItem("Other", "__other__")
+        self.category.currentIndexChanged.connect(self._update_custom_category_visibility)
+        self.custom_category = QLineEdit()
+        self.custom_category.setMinimumHeight(44)
+        self.custom_category.setPlaceholderText("Custom category")
+        category_holder = QWidget()
+        category_layout = QVBoxLayout(category_holder)
+        category_layout.setContentsMargins(0, 0, 0, 0)
+        category_layout.setSpacing(8)
+        category_layout.addWidget(self.category)
+        category_layout.addWidget(self.custom_category)
 
         form.addRow("Machine", self.machine_number)
         form.addRow("Logged by", self.logged_by)
         form.addRow("Issue title", self.issue_title)
         form.addRow("Problem description", self.description)
-        form.addRow("Category", self.category)
+        form.addRow("Category", category_holder)
         panel_layout.addLayout(form)
 
         actions = QHBoxLayout()
@@ -126,19 +146,24 @@ class LogIssuePage(HoneycombBackground):
         self.logged_by.clear()
         self.issue_title.clear()
         self.description.clear()
-        self.category.clear()
+        self.category.setCurrentIndex(0)
+        self.custom_category.clear()
+        self._update_custom_category_visibility()
         self.non_critical_button.setChecked(True)
         self.logged_by.setFocus()
 
     def values(self) -> dict[str, str]:
         severity = LINE_DOWN if self.line_down_button.isChecked() else NON_CRITICAL
+        category_value = self.category.currentData() or ""
+        if category_value == "__other__":
+            category_value = self.custom_category.text().strip()
         return {
             "machine_number": self.machine_number.text().strip(),
             "logged_by": self.logged_by.text().strip(),
             "title": self.issue_title.text().strip(),
             "description": self.description.toPlainText().strip(),
             "severity": severity,
-            "category": self.category.text().strip(),
+            "category": str(category_value).strip(),
         }
 
     def _save(self) -> None:
@@ -154,3 +179,6 @@ class LogIssuePage(HoneycombBackground):
             QMessageBox.warning(self, "Missing information", "Please enter: " + ", ".join(missing))
             return
         self.save_requested.emit(values)
+
+    def _update_custom_category_visibility(self) -> None:
+        self.custom_category.setVisible(self.category.currentData() == "__other__")

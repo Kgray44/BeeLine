@@ -6,7 +6,7 @@
     "Never commit real machine data, employee names, badge IDs, issue history, or secrets."
   ],
   "roles": {
-    "operator": {
+    "viewer": {
       "enabled": false,
       "pin_hash": ""
     },
@@ -19,6 +19,17 @@
       "pin_hash": ""
     }
   },
+  "ui": {
+    "category_options": [
+      "Automation",
+      "Machine",
+      "Maintenance"
+    ],
+    "default_dashboard_filter": "all",
+    "default_issue_sort": "date_desc",
+    "default_issue_display_count": 50,
+    "show_raw_paths": false
+  },
   "analytics": {
     "enabled": true,
     "risk_window_days": 30,
@@ -29,6 +40,11 @@
     "persist_predictive_alerts": true,
     "enable_fix_suggestions": true,
     "enable_related_issues": true
+  },
+  "archive_cache": {
+    "keep_days": 180,
+    "keep_minimum": 1000,
+    "keep_per_machine_minimum": 25
   },
   "machines": []
 }

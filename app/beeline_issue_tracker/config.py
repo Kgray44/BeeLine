@@ -24,8 +24,14 @@ class MachineConfig:
     cell: str
     asset_tag: str
     display_order: int
+    manufacturer: str = ""
+    model: str = ""
+    imm_serial: str = ""
+    robot_type: str = ""
+    robot_model: str = ""
+    robot_serial: str = ""
 
-    def as_database_row(self) -> tuple[str, str, str, str, str, int]:
+    def as_database_row(self) -> tuple[str, str, str, str, str, int, str, str, str, str, str, str]:
         return (
             self.machine_number,
             self.name,
@@ -33,6 +39,12 @@ class MachineConfig:
             self.cell,
             self.asset_tag,
             self.display_order,
+            self.manufacturer,
+            self.model,
+            self.imm_serial,
+            self.robot_type,
+            self.robot_model,
+            self.robot_serial,
         )
 
 
@@ -50,12 +62,30 @@ class AnalyticsConfig:
 
 
 @dataclass(frozen=True)
+class UiConfig:
+    category_options: tuple[str, ...] = ("Automation", "Machine", "Maintenance")
+    default_dashboard_filter: str = "all"
+    default_issue_sort: str = "date_desc"
+    default_issue_display_count: int = 50
+    show_raw_paths: bool = False
+
+
+@dataclass(frozen=True)
+class ArchiveCacheConfig:
+    keep_days: int = 180
+    keep_minimum: int = 1000
+    keep_per_machine_minimum: int = 25
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     machines: tuple[MachineConfig, ...]
     roles: dict[str, RoleConfig]
     analytics: AnalyticsConfig = AnalyticsConfig()
+    ui: UiConfig = UiConfig()
+    archive_cache: ArchiveCacheConfig = ArchiveCacheConfig()
 
-    def machine_rows(self) -> tuple[tuple[str, str, str, str, str, int], ...]:
+    def machine_rows(self) -> tuple[tuple[str, str, str, str, str, int, str, str, str, str, str, str], ...]:
         return tuple(machine.as_database_row() for machine in self.machines)
 
     def enabled_roles(self) -> tuple[RoleConfig, ...]:
@@ -74,6 +104,14 @@ class RuntimeConfig:
             if role and role.enabled and role.pin_hash and verify_pin(pin, role.pin_hash):
                 return True
         return False
+
+    def role_requires_pin(self, role_name: str) -> bool:
+        role = self.roles.get(role_name)
+        return bool(role and role.enabled and role.pin_hash)
+
+    def is_role_enabled(self, role_name: str) -> bool:
+        role = self.roles.get(role_name)
+        return bool(role and role.enabled)
 
 
 @dataclass(frozen=True)
@@ -94,7 +132,9 @@ class AppPaths:
     db_path: Path
     archive_path: Path
     approved_logo_path: Path
+    approved_logo_jpg_path: Path
     placeholder_logo_path: Path
+    placeholder_logo_jpg_path: Path
 
     @classmethod
     def from_environment(cls) -> "AppPaths":
@@ -123,7 +163,9 @@ class AppPaths:
             db_path=data_dir / "beeline.sqlite",
             archive_path=archive_dir / "beeline_resolved_archive.xlsx",
             approved_logo_path=branding_dir / "nolato_logo.png",
+            approved_logo_jpg_path=branding_dir / "nolato_logo.jpg",
             placeholder_logo_path=branding_dir / "nolato_logo_placeholder.png",
+            placeholder_logo_jpg_path=branding_dir / "nolato_logo_placeholder.jpg",
         )
 
     def ensure_directories(self) -> None:
@@ -137,10 +179,19 @@ class AppPaths:
         self.branding_dir.mkdir(parents=True, exist_ok=True)
 
     def logo_path(self) -> Path | None:
-        if self.approved_logo_path.exists():
-            return self.approved_logo_path
-        if self.placeholder_logo_path.exists():
-            return self.placeholder_logo_path
+        configured = os.environ.get("BEELINE_LOGO_PATH", "").strip()
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if configured_path.exists():
+                return configured_path
+        for path in (
+            self.approved_logo_path,
+            self.approved_logo_jpg_path,
+            self.placeholder_logo_path,
+            self.placeholder_logo_jpg_path,
+        ):
+            if path.exists():
+                return path
         return None
 
 
@@ -175,6 +226,14 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
                     cell=str(machine.get("cell", "")).strip(),
                     asset_tag=str(machine.get("asset_tag", "")).strip(),
                     display_order=int(machine.get("display_order", index * 10)),
+                    manufacturer=str(
+                        machine.get("manufacturer", machine.get("imm_make", ""))
+                    ).strip(),
+                    model=str(machine.get("model", machine.get("imm_model", ""))).strip(),
+                    imm_serial=str(machine.get("imm_serial", "")).strip(),
+                    robot_type=str(machine.get("robot_type", machine.get("robot_make", ""))).strip(),
+                    robot_model=str(machine.get("robot_model", "")).strip(),
+                    robot_serial=str(machine.get("robot_serial", "")).strip(),
                 )
             )
         except KeyError as exc:
@@ -184,6 +243,8 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
         machines=tuple(machines),
         roles=_load_roles(raw.get("roles", {})),
         analytics=_load_analytics(raw.get("analytics", {})),
+        ui=_load_ui(raw.get("ui", {})),
+        archive_cache=_load_archive_cache(raw.get("archive_cache", {})),
     )
 
 
@@ -192,8 +253,10 @@ def _load_roles(raw_roles: object) -> dict[str, RoleConfig]:
     if not isinstance(raw_roles, dict):
         raw_roles = {}
 
-    for role_name in ("operator", "technician", "admin"):
+    for role_name in ("viewer", "technician", "admin"):
         raw_role = raw_roles.get(role_name, {})
+        if role_name == "viewer" and not raw_role:
+            raw_role = raw_roles.get("operator", {})
         if not isinstance(raw_role, dict):
             raw_role = {}
         roles[role_name] = RoleConfig(
@@ -202,6 +265,38 @@ def _load_roles(raw_roles: object) -> dict[str, RoleConfig]:
             pin_hash=str(raw_role.get("pin_hash", "") or "").strip(),
         )
     return roles
+
+
+def _load_ui(raw_ui: object) -> UiConfig:
+    defaults = UiConfig()
+    if not isinstance(raw_ui, dict):
+        raw_ui = {}
+
+    raw_categories = raw_ui.get("category_options", defaults.category_options)
+    categories: list[str] = []
+    if isinstance(raw_categories, (list, tuple)):
+        for category in raw_categories:
+            value = str(category).strip()
+            if value and value.casefold() not in {existing.casefold() for existing in categories}:
+                categories.append(value)
+    if not categories:
+        categories = list(defaults.category_options)
+
+    return UiConfig(
+        category_options=tuple(categories),
+        default_dashboard_filter=str(raw_ui.get("default_dashboard_filter", defaults.default_dashboard_filter)).strip()
+        or defaults.default_dashboard_filter,
+        default_issue_sort=str(raw_ui.get("default_issue_sort", defaults.default_issue_sort)).strip()
+        or defaults.default_issue_sort,
+        default_issue_display_count=_int_setting(
+            raw_ui,
+            "default_issue_display_count",
+            defaults.default_issue_display_count,
+            minimum=1,
+            maximum=500,
+        ),
+        show_raw_paths=_bool_setting(raw_ui, "show_raw_paths", defaults.show_raw_paths),
+    )
 
 
 def _load_analytics(raw_analytics: object) -> AnalyticsConfig:
@@ -253,6 +348,23 @@ def _load_analytics(raw_analytics: object) -> AnalyticsConfig:
             raw_analytics,
             "enable_related_issues",
             defaults.enable_related_issues,
+        ),
+    )
+
+
+def _load_archive_cache(raw_archive_cache: object) -> ArchiveCacheConfig:
+    defaults = ArchiveCacheConfig()
+    if not isinstance(raw_archive_cache, dict):
+        raw_archive_cache = {}
+
+    return ArchiveCacheConfig(
+        keep_days=_int_setting(raw_archive_cache, "keep_days", defaults.keep_days, minimum=1),
+        keep_minimum=_int_setting(raw_archive_cache, "keep_minimum", defaults.keep_minimum, minimum=1),
+        keep_per_machine_minimum=_int_setting(
+            raw_archive_cache,
+            "keep_per_machine_minimum",
+            defaults.keep_per_machine_minimum,
+            minimum=0,
         ),
     )
 
