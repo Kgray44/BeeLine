@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication
 from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
+from beeline_issue_tracker.domain import NON_CRITICAL
 from beeline_issue_tracker.ui.main_window import MainWindow
 from beeline_issue_tracker.ui.theme import DARK_THEME, LIGHT_THEME, ThemeManager
 
@@ -45,6 +46,7 @@ class UiThemeApplicationTest(unittest.TestCase):
                 archive_dir=root / "archive",
                 logs_dir=root / "logs",
                 backups_dir=root / "backups",
+                attachments_dir=root / "data" / "attachments",
                 branding_dir=root / "assets" / "branding",
                 config_template_path=root / "templates" / "beeline_config.template.json",
                 db_template_path=root / "templates" / "beeline.template.sqlite",
@@ -59,6 +61,27 @@ class UiThemeApplicationTest(unittest.TestCase):
             initialize_database(paths.db_path, DEMO_MACHINES)
             repository = IssueRepository(paths.db_path)
             machine_number = repository.list_machines_with_status()[0].machine_number
+            active_issue = repository.log_issue(
+                machine_number=machine_number,
+                logged_by="UI Test",
+                title="Sensor drift",
+                description="Sensor value is drifting.",
+                severity=NON_CRITICAL,
+                category="Sensor",
+            )
+            to_resolve = repository.log_issue(
+                machine_number=machine_number,
+                logged_by="UI Test",
+                title="Guard switch open",
+                description="Guard switch is open.",
+                severity=NON_CRITICAL,
+                category="Safety",
+            )
+            resolved_issue = repository.resolve_issue(
+                to_resolve.id,
+                solution="Closed guard and verified switch.",
+                resolved_by="UI Test",
+            )
             settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
             theme_manager = ThemeManager(settings)
             window = MainWindow(repository, paths, theme_manager)
@@ -67,7 +90,10 @@ class UiThemeApplicationTest(unittest.TestCase):
                 theme_manager.set_theme(theme_name)
                 self.app.setStyleSheet(theme_manager.build_stylesheet())
                 window.show_dashboard()
+                window.show_open_issues()
                 window.show_machine(machine_number)
+                window.show_active_issue_detail(active_issue.id, return_context="machine")
+                window.show_resolved_issue_detail(resolved_issue.id, return_context="machine")
                 window.show_log_issue(machine_number)
 
             window.close()

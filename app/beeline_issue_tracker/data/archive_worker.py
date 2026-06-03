@@ -44,8 +44,7 @@ class ArchiveIssueTask(QRunnable):
             result.sheet_name,
             result.row_number,
         )
-        self.signals.finished.emit(
-            self.issue.id,
-            True,
-            f"Archived to {result.archive_path} ({result.sheet_name} row {result.row_number})",
-        )
+        message = f"Archived to {result.archive_path} ({result.sheet_name} row {result.row_number})"
+        if result.grouped_refresh_deferred:
+            message += "; grouped view refresh deferred until --repair-archive"
+        self.signals.finished.emit(self.issue.id, True, message)

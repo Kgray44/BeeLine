@@ -29,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the Excel archive path and latest archive status without opening the UI.",
     )
+    parser.add_argument(
+        "--repair-archive",
+        action="store_true",
+        help="Rebuild the readable grouped Excel archive view, then print archive status.",
+    )
     return parser
 
 
@@ -81,9 +86,13 @@ def main(argv: list[str] | None = None) -> int:
     initialize_runtime_files(paths)
     runtime_config = load_runtime_config(paths.runtime_config_path)
     initialize_database(paths.db_path, runtime_config.machine_rows())
-    refresh_archive_workbook(paths.archive_path)
 
     repository = IssueRepository(paths.db_path)
+    if args.repair_archive:
+        refresh_archive_workbook(paths.archive_path)
+        print("Excel archive repaired/refreshed.")
+        print_archive_status(paths, repository)
+        return 0
     if args.check:
         machines = repository.list_machines_with_status()
         print(f"{APP_NAME}: database ready at {paths.db_path}")
@@ -107,6 +116,6 @@ def main(argv: list[str] | None = None) -> int:
     app.setStyleSheet(theme_manager.build_stylesheet())
     theme_manager.theme_changed.connect(lambda _theme: app.setStyleSheet(theme_manager.build_stylesheet()))
 
-    window = MainWindow(repository, paths, theme_manager)
+    window = MainWindow(repository, paths, theme_manager, runtime_config)
     window.show()
     return app.exec()

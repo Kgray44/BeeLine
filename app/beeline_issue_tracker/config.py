@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from shutil import copy2
 
+from beeline_issue_tracker.security import RoleConfig, verify_pin
+
 
 APP_NAME = "BeeLine Issue Tracker"
 
@@ -37,9 +39,27 @@ class MachineConfig:
 @dataclass(frozen=True)
 class RuntimeConfig:
     machines: tuple[MachineConfig, ...]
+    roles: dict[str, RoleConfig]
 
     def machine_rows(self) -> tuple[tuple[str, str, str, str, str, int], ...]:
         return tuple(machine.as_database_row() for machine in self.machines)
+
+    def enabled_roles(self) -> tuple[RoleConfig, ...]:
+        return tuple(role for role in self.roles.values() if role.enabled and role.pin_hash)
+
+    def resolve_requires_pin(self) -> bool:
+        return any(
+            self.roles.get(role_name, RoleConfig(role_name)).enabled
+            and bool(self.roles.get(role_name, RoleConfig(role_name)).pin_hash)
+            for role_name in ("technician", "admin")
+        )
+
+    def verify_pin_for_roles(self, pin: str, role_names: tuple[str, ...]) -> bool:
+        for role_name in role_names:
+            role = self.roles.get(role_name)
+            if role and role.enabled and role.pin_hash and verify_pin(pin, role.pin_hash):
+                return True
+        return False
 
 
 @dataclass(frozen=True)
@@ -51,6 +71,7 @@ class AppPaths:
     archive_dir: Path
     logs_dir: Path
     backups_dir: Path
+    attachments_dir: Path
     branding_dir: Path
     config_template_path: Path
     db_template_path: Path
@@ -79,6 +100,7 @@ class AppPaths:
             archive_dir=archive_dir,
             logs_dir=logs_dir,
             backups_dir=backups_dir,
+            attachments_dir=data_dir / "attachments",
             branding_dir=branding_dir,
             config_template_path=template_dir / "beeline_config.template.json",
             db_template_path=template_dir / "beeline.template.sqlite",
@@ -97,6 +119,7 @@ class AppPaths:
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.backups_dir.mkdir(parents=True, exist_ok=True)
+        self.attachments_dir.mkdir(parents=True, exist_ok=True)
         self.branding_dir.mkdir(parents=True, exist_ok=True)
 
     def logo_path(self) -> Path | None:
@@ -143,4 +166,21 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
         except KeyError as exc:
             raise ValueError(f"Machine config row {index} is missing {exc.args[0]!r}.") from exc
 
-    return RuntimeConfig(machines=tuple(machines))
+    return RuntimeConfig(machines=tuple(machines), roles=_load_roles(raw.get("roles", {})))
+
+
+def _load_roles(raw_roles: object) -> dict[str, RoleConfig]:
+    roles: dict[str, RoleConfig] = {}
+    if not isinstance(raw_roles, dict):
+        raw_roles = {}
+
+    for role_name in ("operator", "technician", "admin"):
+        raw_role = raw_roles.get(role_name, {})
+        if not isinstance(raw_role, dict):
+            raw_role = {}
+        roles[role_name] = RoleConfig(
+            name=role_name,
+            enabled=bool(raw_role.get("enabled", False)),
+            pin_hash=str(raw_role.get("pin_hash", "") or "").strip(),
+        )
+    return roles

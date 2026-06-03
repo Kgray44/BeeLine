@@ -13,7 +13,16 @@ for path in (APP_DIR, PROJECT_ROOT):
 
 from openpyxl import load_workbook
 
-from beeline_issue_tracker.data.archive import ARCHIVE_SHEET, GROUPED_HEADERS, GROUPED_SHEET, HEADERS, ExcelArchive
+from beeline_issue_tracker.data import archive as archive_module
+from beeline_issue_tracker.data.archive import (
+    ARCHIVE_SHEET,
+    GROUPED_HEADERS,
+    GROUPED_SHEET,
+    HEADERS,
+    INFO_SHEET,
+    ExcelArchive,
+    refresh_archive_workbook,
+)
 from beeline_issue_tracker.data.archive_worker import ArchiveIssueTask
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
@@ -62,6 +71,7 @@ class ArchiveFlowTest(unittest.TestCase):
         self.assertEqual("archived", recent[0].archive_status)
         self.assertTrue(self.archive_path.exists())
         self.assertEqual(2, result.row_number)
+        self.assertFalse(result.grouped_refresh_deferred)
 
         workbook = load_workbook(self.archive_path, data_only=True)
         self.assertIn(ARCHIVE_SHEET, workbook.sheetnames)
@@ -139,6 +149,49 @@ class ArchiveFlowTest(unittest.TestCase):
         self.assertEqual(1, grouped.row_dimensions[june_2_row + 1].outlineLevel)
         self.assertEqual(1, grouped.row_dimensions[june_1_row + 1].outlineLevel)
         self.assertEqual(1, grouped.row_dimensions[june_1_row + 2].outlineLevel)
+
+    def test_large_archive_defers_grouped_refresh_until_repair(self) -> None:
+        old_threshold = archive_module.GROUPED_REFRESH_ROW_THRESHOLD
+        archive_module.GROUPED_REFRESH_ROW_THRESHOLD = 2
+        try:
+            archive = ExcelArchive(self.archive_path)
+            first = archive.append_resolved_issue(self._resolved_issue(
+                1,
+                title="First issue",
+                severity=NON_CRITICAL,
+                created_at="2026-06-01T07:00:00+00:00",
+                resolved_at="2026-06-01T08:00:00+00:00",
+            ))
+            second = archive.append_resolved_issue(self._resolved_issue(
+                2,
+                title="Second issue",
+                severity=NON_CRITICAL,
+                created_at="2026-06-01T09:00:00+00:00",
+                resolved_at="2026-06-01T10:00:00+00:00",
+            ))
+            third = archive.append_resolved_issue(self._resolved_issue(
+                3,
+                title="Third issue",
+                severity=LINE_DOWN,
+                created_at="2026-06-02T09:00:00+00:00",
+                resolved_at="2026-06-02T10:00:00+00:00",
+            ))
+
+            self.assertFalse(first.grouped_refresh_deferred)
+            self.assertFalse(second.grouped_refresh_deferred)
+            self.assertTrue(third.grouped_refresh_deferred)
+
+            workbook = load_workbook(self.archive_path, data_only=True)
+            info_values = [cell.value for row in workbook[INFO_SHEET].iter_rows(values_only=False) for cell in row]
+            self.assertIn("Deferred; run python run_beeline.py --repair-archive", info_values)
+
+            refresh_archive_workbook(self.archive_path)
+            repaired = load_workbook(self.archive_path, data_only=True)
+            repaired_info = [cell.value for row in repaired[INFO_SHEET].iter_rows(values_only=False) for cell in row]
+            self.assertIn("Current", repaired_info)
+            self.assertIn(GROUPED_SHEET, repaired.sheetnames)
+        finally:
+            archive_module.GROUPED_REFRESH_ROW_THRESHOLD = old_threshold
 
     def test_failed_excel_archive_marks_resolved_issue_failed_in_sqlite(self) -> None:
         issue = self.repository.log_issue(

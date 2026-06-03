@@ -9,6 +9,12 @@ venv/
 .env.*
 *.pem
 *.key
+*.sqlite
+*.sqlite3
+*.db
+*.xlsx
+*.xlsm
+*.xls
 *secret*
 *token*
 *password*
@@ -35,12 +41,26 @@ logs/*
 !logs/.gitkeep
 !logs/README.md
 
+attachments/
+screenshots/
+captures/
+exports/
+
 # Do not commit approved/private brand assets without explicit approval.
 assets/branding/nolato_logo.png
 
-# Local design notes and generated exports are NDA-sensitive unless reviewed.
+# Local media, design notes, and generated exports are NDA-sensitive unless reviewed.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.tiff
 *.pdf
 *.log
 *.zip
 *.bak
 ~$*
+
+!assets/branding/nolato_logo_placeholder.png

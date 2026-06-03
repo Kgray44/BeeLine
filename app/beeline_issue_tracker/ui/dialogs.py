@@ -4,11 +4,45 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QTextEdit,
     QVBoxLayout,
 )
+
+class PinDialog(QDialog):
+    def __init__(self, action_label: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("PIN Required")
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        prompt = QLabel(action_label)
+        prompt.setObjectName("sectionTitle")
+        layout.addWidget(prompt)
+
+        self.pin = QLineEdit()
+        self.pin.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pin.setPlaceholderText("Technician/Admin PIN")
+        self.pin.setMinimumHeight(42)
+        layout.addWidget(self.pin)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def value(self) -> str:
+        return self.pin.text().strip()
+
+    def accept(self) -> None:
+        if not self.value():
+            QMessageBox.warning(self, "Missing PIN", "Please enter a PIN.")
+            return
+        super().accept()
 
 
 class ResolveIssueDialog(QDialog):
