@@ -20,6 +20,7 @@ from beeline_issue_tracker.domain import (
     MachineSummary,
     display_issue_id,
 )
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui.issue_list_model import format_duration_between, format_timestamp, preview_text
 from beeline_issue_tracker.ui.theme import ThemeManager
 from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground, MachineCard, MetricPill, SearchBox, StatusBadge
@@ -41,6 +42,7 @@ class HiveDashboardPage(HoneycombBackground):
         self.paths = paths
         self._machines: list[MachineSummary] = []
         self._machine_cards: dict[str, MachineCard] = {}
+        self._last_card_layout: tuple[tuple[str, ...], int] | None = None
         self._search_results: list[IssueSearchResult] = []
         self._deep_task: DeepArchiveSearchTask | None = None
         self._resize_timer = QTimer(self)
@@ -172,10 +174,14 @@ class HiveDashboardPage(HoneycombBackground):
         page_layout.addWidget(self.results_scroll, 1)
 
     def refresh(self) -> None:
+        started_at = perf_now()
+        call_started = perf_now()
         self._machines = self.repository.list_machines_with_status()
+        perf_log("repo.list_machines_with_status", count=len(self._machines), elapsed_ms=elapsed_ms(call_started))
         self._update_summary()
         self._update_filter_options()
         self._render_dashboard()
+        perf_log("dashboard.refresh_internal", machines=len(self._machines), elapsed_ms=elapsed_ms(started_at))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -220,32 +226,58 @@ class HiveDashboardPage(HoneycombBackground):
         self._render_cards()
 
     def _render_cards(self) -> None:
+        started_at = perf_now()
         self._clear_layout(self.results_layout)
-        self._detach_grid_widgets()
         current_numbers = {machine.machine_number for machine in self._machines}
+        removed = 0
         for machine_number in tuple(self._machine_cards):
             if machine_number not in current_numbers:
                 card = self._machine_cards.pop(machine_number)
                 card.setParent(None)
                 card.deleteLater()
+                removed += 1
+                self._last_card_layout = None
 
         machines = self._filtered_machines()
         columns = self._column_count()
+        visible_numbers_ordered = tuple(machine.machine_number for machine in machines)
+        layout_key = (visible_numbers_ordered, columns)
+        layout_rebuilt = layout_key != self._last_card_layout
+        if layout_rebuilt:
+            self._detach_grid_widgets()
+        created = 0
+        updated = 0
         for index, machine in enumerate(machines):
             card = self._machine_cards.get(machine.machine_number)
             if card is None:
                 card = MachineCard(machine)
                 card.clicked.connect(self.machine_selected.emit)
                 self._machine_cards[machine.machine_number] = card
+                created += 1
+                layout_rebuilt = True
             else:
                 card.update_machine(machine)
+                updated += 1
             card.show()
-            self.grid.addWidget(card, index // columns, index % columns)
+            if layout_rebuilt:
+                self.grid.addWidget(card, index // columns, index % columns)
         visible_numbers = {machine.machine_number for machine in machines}
         for machine_number, card in self._machine_cards.items():
             if machine_number not in visible_numbers:
                 card.hide()
-        self.grid.setRowStretch((len(machines) // columns) + 1, 1)
+        if layout_rebuilt:
+            self.grid.setRowStretch((len(machines) // columns) + 1, 1)
+            self._last_card_layout = layout_key
+        perf_log(
+            "dashboard.render_cards",
+            visible=len(machines),
+            cached=len(self._machine_cards),
+            created=created,
+            updated=updated,
+            removed=removed,
+            layout_rebuilt=layout_rebuilt,
+            elapsed_ms=elapsed_ms(started_at),
+        )
 
     def _render_issue_results(self) -> None:
         self._cancel_deep_search(quiet=True)
@@ -253,10 +285,18 @@ class HiveDashboardPage(HoneycombBackground):
 
         query = self.search.text().strip()
         state_filter = self.issue_state.currentData() or "all"
+        started_at = perf_now()
         self._search_results = self.repository.search_issues(
             query,
             state_filter=state_filter,
             limit=QUICK_SEARCH_LIMIT,
+        )
+        perf_log(
+            "dashboard.quick_search",
+            state=state_filter,
+            count=len(self._search_results),
+            limit=QUICK_SEARCH_LIMIT,
+            elapsed_ms=elapsed_ms(started_at),
         )
         mode = self.search_mode.currentData() or "quick"
         if mode == "deep" and state_filter != "open":
@@ -296,6 +336,7 @@ class HiveDashboardPage(HoneycombBackground):
         self.results_layout.addStretch(1)
 
     def _start_deep_search(self, query: str, state_filter: str) -> None:
+        perf_log("dashboard.deep_search_start", state=state_filter, quick_count=len(self._search_results))
         task = DeepArchiveSearchTask(
             self.paths.archive_path,
             query=query,
@@ -485,6 +526,7 @@ class HiveDashboardPage(HoneycombBackground):
                 HiveDashboardPage._clear_layout(child_layout)
 
     def _detach_grid_widgets(self) -> None:
+        self._last_card_layout = None
         while self.grid.count():
             item = self.grid.takeAt(0)
             widget = item.widget()

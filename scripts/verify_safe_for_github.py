@@ -45,6 +45,9 @@ ALLOWED_MEDIA_PLACEHOLDERS = {
     "assets/branding/nolato_logo.png",
     "assets/branding/nolato_logo_placeholder.png",
 }
+SAFE_SYNTHETIC_DATA_FILES = {
+    "scripts/perf_seed.py",
+}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"}
 SECRET_NAME_RE = re.compile(
     r"(^|[/\\])(\.env|.*secret.*|.*token.*|.*password.*|.*credential.*|.*apikey.*|.*api_key.*)$",
@@ -220,7 +223,7 @@ def scan_text_for_sensitive_content(rel: str, text: str) -> list[str]:
         if pattern.search(text):
             findings.append(f"{label} found in tracked/staged text file: {rel}")
 
-    if not _is_doc_file(rel) and REAL_DATA_RE.search(text) and not _is_safe_warning_text(text):
+    if not _is_doc_file(rel) and REAL_DATA_RE.search(text) and not _is_safe_warning_text(rel, text):
         findings.append(f"Real plant/machine data wording found in non-doc file: {rel}")
     return findings
 
@@ -322,7 +325,8 @@ def _is_doc_file(rel: str) -> bool:
     return rel.endswith(".md") or rel.startswith("docs/") or rel.endswith("/readme.md")
 
 
-def _is_safe_warning_text(text: str) -> bool:
+def _is_safe_warning_text(rel: str, text: str) -> bool:
+    rel = rel.replace("\\", "/").casefold()
     lowered = " ".join(text.casefold().split())
     warning_phrases = (
         "never commit real machine data",
@@ -330,7 +334,9 @@ def _is_safe_warning_text(text: str) -> bool:
         "real plant runtime data belongs in ignored local folders",
         "config template should not contain real machine rows",
     )
-    return any(phrase in lowered for phrase in warning_phrases)
+    if any(phrase in lowered for phrase in warning_phrases):
+        return True
+    return rel in SAFE_SYNTHETIC_DATA_FILES and "no real plant data" in lowered and "fake" in lowered
 
 
 def _rel(path: Path) -> str:

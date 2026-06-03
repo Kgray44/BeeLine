@@ -195,13 +195,14 @@ class AppPaths:
         return None
 
 
-def initialize_runtime_files(paths: AppPaths) -> None:
+def initialize_runtime_files(paths: AppPaths, *, include_archive: bool = False) -> None:
     paths.ensure_directories()
-    copies = (
+    copies = [
         (paths.config_template_path, paths.runtime_config_path),
         (paths.db_template_path, paths.db_path),
-        (paths.archive_template_path, paths.archive_path),
-    )
+    ]
+    if include_archive:
+        copies.append((paths.archive_template_path, paths.archive_path))
     for template_path, runtime_path in copies:
         if runtime_path.exists():
             continue

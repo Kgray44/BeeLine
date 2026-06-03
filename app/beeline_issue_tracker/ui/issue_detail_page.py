@@ -84,6 +84,14 @@ class IssueDetailPage(HoneycombBackground):
         self.scroll.setWidget(self.content)
         page.addWidget(self.scroll, 1)
 
+    def show_loading(self, mode: str, issue_id: int) -> None:
+        self._machine_number = ""
+        self._active_issue_id = None
+        self.resolve_button.setVisible(mode == "active")
+        self._set_header("Issue Detail", "Unknown/Error", f"Loading {mode} issue {issue_id}...")
+        self._clear_content()
+        self._add_text_panel("Loading", "Loading issue details...")
+
     def load_active(
         self,
         context: IssueWithMachineContext,

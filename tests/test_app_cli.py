@@ -23,16 +23,19 @@ class AppCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env = self._env(Path(tmp))
             with patch.dict(os.environ, env, clear=False):
-                create_templates(AppPaths.from_environment(), force=True)
+                paths = AppPaths.from_environment()
+                create_templates(paths, force=True)
                 with (
                     patch("beeline_issue_tracker.app.refresh_archive_workbook") as refresh,
                     patch("beeline_issue_tracker.app.inspect_archive") as inspect_archive,
                 ):
                     result = beeline_app.main(["--check"])
+                archive_exists_after_check = paths.archive_path.exists()
 
         self.assertEqual(0, result)
         refresh.assert_not_called()
         inspect_archive.assert_not_called()
+        self.assertFalse(archive_exists_after_check)
 
     def test_repair_archive_forces_archive_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

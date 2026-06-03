@@ -10,6 +10,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from beeline_issue_tracker.domain import LINE_DOWN, NON_CRITICAL, NO_ISSUES, UNKNOWN_ERROR, ResolvedIssue, display_issue_id
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 
 
 ARCHIVE_SHEET = "Resolved_Issues"
@@ -98,6 +99,8 @@ class ExcelArchive:
         self.archive_path = archive_path
 
     def append_resolved_issue(self, issue: ResolvedIssue) -> ArchiveWriteResult:
+        started_at = perf_now()
+        perf_log("excel_access", operation="append_resolved_issue", path=self.archive_path)
         self.archive_path.parent.mkdir(parents=True, exist_ok=True)
         created_workbook = not self.archive_path.exists()
         workbook = self._load_or_create_workbook()
@@ -106,7 +109,10 @@ class ExcelArchive:
         record_count = _raw_record_count(raw_sheet)
         defer_grouped = record_count > GROUPED_REFRESH_ROW_THRESHOLD
         self._refresh_workbook(workbook, defer_grouped=defer_grouped)
+        save_started = perf_now()
         workbook.save(self.archive_path)
+        perf_log("excel_access", operation="workbook.save", path=self.archive_path, elapsed_ms=elapsed_ms(save_started))
+        perf_log("archive.append_resolved_issue", issue_id=issue.id, elapsed_ms=elapsed_ms(started_at))
         return ArchiveWriteResult(
             archive_path=self.archive_path,
             sheet_name=ARCHIVE_SHEET,
@@ -117,7 +123,10 @@ class ExcelArchive:
 
     def _load_or_create_workbook(self):
         if self.archive_path.exists():
+            started_at = perf_now()
+            perf_log("excel_access", operation="load_workbook", path=self.archive_path)
             workbook = load_workbook(self.archive_path)
+            perf_log("excel_access", operation="load_workbook_done", path=self.archive_path, elapsed_ms=elapsed_ms(started_at))
         else:
             workbook = Workbook()
             workbook.active.title = INFO_SHEET
@@ -433,6 +442,8 @@ class ExcelArchive:
 
 
 def create_empty_archive_workbook(archive_path: Path) -> None:
+    started_at = perf_now()
+    perf_log("excel_access", operation="create_empty_archive_workbook", path=archive_path)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
     workbook.active.title = INFO_SHEET
@@ -440,14 +451,18 @@ def create_empty_archive_workbook(archive_path: Path) -> None:
     archive._ensure_workbook_layout(workbook)
     archive._refresh_workbook(workbook)
     workbook.save(archive_path)
+    perf_log("excel_access", operation="create_empty_archive_workbook_done", path=archive_path, elapsed_ms=elapsed_ms(started_at))
 
 
 def refresh_archive_workbook(archive_path: Path) -> None:
+    started_at = perf_now()
+    perf_log("excel_access", operation="refresh_archive_workbook", path=archive_path)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     archive = ExcelArchive(archive_path)
     workbook = archive._load_or_create_workbook()
     archive._refresh_workbook(workbook)
     workbook.save(archive_path)
+    perf_log("excel_access", operation="refresh_archive_workbook_done", path=archive_path, elapsed_ms=elapsed_ms(started_at))
 
 
 def inspect_archive(archive_path: Path) -> ArchiveInspection:
@@ -466,7 +481,10 @@ def inspect_archive(archive_path: Path) -> ArchiveInspection:
 
     workbook = None
     try:
+        started_at = perf_now()
+        perf_log("excel_access", operation="inspect_archive.load_workbook", path=archive_path)
         workbook = load_workbook(archive_path, read_only=True, data_only=True)
+        perf_log("excel_access", operation="inspect_archive.load_workbook_done", path=archive_path, elapsed_ms=elapsed_ms(started_at))
         sheet_names = tuple(workbook.sheetnames)
         if ARCHIVE_SHEET not in workbook.sheetnames:
             return ArchiveInspection(

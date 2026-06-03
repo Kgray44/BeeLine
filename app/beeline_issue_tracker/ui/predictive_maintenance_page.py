@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Predictive maintenance dashboard page."""
 
+from dataclasses import dataclass
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -39,10 +40,46 @@ from beeline_issue_tracker.analytics.predictive_service import (
 )
 from beeline_issue_tracker.analytics.reporting import build_predictive_summary_text
 from beeline_issue_tracker.config import AppPaths
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui.charts import BarBreakdownChart, LineTrendChart, trend_issue_values
 from beeline_issue_tracker.ui.issue_list_model import format_timestamp, preview_text
 from beeline_issue_tracker.ui.theme import ThemeManager
 from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground, MetricPill, SearchBox
+
+
+@dataclass(frozen=True)
+class PredictivePageSnapshot:
+    risks: list[MachineRiskSummary]
+    alerts: list[PredictiveMaintenanceAlert]
+    patterns: list[object]
+    trend_labels: list[str]
+    trend_values: list[int]
+    category_counts: dict[str, int]
+
+
+def load_predictive_page_snapshot(service: PredictiveMaintenanceService) -> PredictivePageSnapshot:
+    started_at = perf_now()
+    call_started = perf_now()
+    risks = service.get_all_machine_risks()
+    perf_log("predictive.get_all_machine_risks", count=len(risks), elapsed_ms=elapsed_ms(call_started))
+    call_started = perf_now()
+    alerts = service.get_predictive_alerts(limit=20)
+    perf_log("predictive.get_alerts", count=len(alerts), elapsed_ms=elapsed_ms(call_started))
+    call_started = perf_now()
+    patterns = service.get_recurring_patterns(days=service.settings.recurrence_window_days)
+    perf_log("predictive.get_patterns", count=len(patterns), elapsed_ms=elapsed_ms(call_started))
+    call_started = perf_now()
+    labels, values = trend_issue_values(
+        service.get_global_trend(
+            periods=service.settings.grouped_chart_periods,
+        )
+    )
+    perf_log("predictive.get_global_trend", elapsed_ms=elapsed_ms(call_started))
+    call_started = perf_now()
+    category_counts = service.get_category_breakdown(days=service.settings.risk_window_days)
+    perf_log("predictive.get_category_breakdown", count=len(category_counts), elapsed_ms=elapsed_ms(call_started))
+    perf_log("predictive.snapshot", elapsed_ms=elapsed_ms(started_at))
+    return PredictivePageSnapshot(risks, alerts, patterns, labels, values, category_counts)
 
 
 class PredictiveMaintenancePage(HoneycombBackground):
@@ -78,6 +115,14 @@ class PredictiveMaintenancePage(HoneycombBackground):
         self._risks: list[MachineRiskSummary] = []
         self._alerts: list[PredictiveMaintenanceAlert] = []
         self._visible_risks: list[MachineRiskSummary] = []
+        self._patterns: list[object] = []
+        self._trend_labels: list[str] = []
+        self._trend_values: list[int] = []
+        self._category_counts: dict[str, int] = {}
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(160)
+        self._render_timer.timeout.connect(self._render_risk_table)
 
         page = QVBoxLayout(self)
         page.setContentsMargins(24, 22, 24, 22)
@@ -128,7 +173,7 @@ class PredictiveMaintenancePage(HoneycombBackground):
         controls.setContentsMargins(14, 12, 14, 12)
         controls.setSpacing(10)
         self.search = SearchBox("Search machines...")
-        self.search.textChanged.connect(self._render_risk_table)
+        self.search.textChanged.connect(self._queue_risk_render)
         self.risk_filter = QComboBox()
         self.risk_filter.setObjectName("compactDropdown")
         self.risk_filter.addItem("All Risk", "")
@@ -217,13 +262,38 @@ class PredictiveMaintenancePage(HoneycombBackground):
         self._configure_tables()
 
     def refresh(self) -> None:
-        self._risks = self.service.get_all_machine_risks()
-        self._alerts = self.service.get_predictive_alerts(limit=20)
-        patterns = self.service.get_recurring_patterns(days=self.service.settings.recurrence_window_days)
-        self._update_summary(patterns)
+        self.apply_snapshot(load_predictive_page_snapshot(self.service))
+
+    def show_loading(self) -> None:
+        self.critical_pill.set_value("-")
+        self.high_pill.set_value("-")
+        self.medium_pill.set_value("-")
+        self.recurring_pill.set_value("-")
+        self.line_down_pill.set_value("-")
+        self.open_total_pill.set_value("-")
+        self._risks = []
+        self._alerts = []
+        self._patterns = []
+        self._trend_labels = []
+        self._trend_values = []
+        self._category_counts = {}
+        self._render_risk_table(empty_text="Loading predictive maintenance data...")
+        self._render_alerts(loading=True)
+        self._render_patterns([])
+        self.trend_chart.set_points("Global Issue Trend", [], [])
+        self.breakdown_chart.set_values("Category Breakdown", {})
+
+    def apply_snapshot(self, snapshot: PredictivePageSnapshot) -> None:
+        self._risks = list(snapshot.risks)
+        self._alerts = list(snapshot.alerts)
+        self._patterns = list(snapshot.patterns)
+        self._trend_labels = list(snapshot.trend_labels)
+        self._trend_values = list(snapshot.trend_values)
+        self._category_counts = dict(snapshot.category_counts)
+        self._update_summary(self._patterns)
         self._render_risk_table()
         self._render_alerts()
-        self._render_patterns(patterns)
+        self._render_patterns(self._patterns)
         self._render_charts()
 
     def focus_machine(self, machine_number: str) -> None:
@@ -247,51 +317,65 @@ class PredictiveMaintenancePage(HoneycombBackground):
         self.line_down_pill.set_value(str(sum(risk.line_down_open_count for risk in self._risks)))
         self.open_total_pill.set_value(str(sum(risk.open_issue_count for risk in self._risks)))
 
-    def _render_risk_table(self) -> None:
+    def _queue_risk_render(self) -> None:
+        self._render_timer.start()
+
+    def _render_risk_table(self, empty_text: str | None = None) -> None:
+        started_at = perf_now()
         filtered = filter_machine_risks(
             self._risks,
             query=self.search.text(),
             risk_level=self.risk_filter.currentData() or "",
         )
         self._visible_risks = sort_machine_risks(filtered, sort_key=self.sort.currentData() or "risk_score")
-        self.risk_table.setRowCount(0)
-        if not self._visible_risks:
-            self.risk_table.setRowCount(1)
-            self.risk_table.setSpan(0, 0, 1, len(self.RISK_COLUMNS))
-            self.risk_table.setItem(
-                0,
-                0,
-                self._item(
-                    "Not enough issue history yet to generate strong predictions. "
-                    "BeeLine will improve predictions as issues are logged and resolved."
-                ),
-            )
-            return
-        self.risk_table.clearSpans()
-        self.risk_table.setRowCount(len(self._visible_risks))
-        for row, risk in enumerate(self._visible_risks):
-            location = " / ".join(part for part in (risk.area, risk.cell) if part)
-            self.risk_table.setItem(row, 0, self._item(f"{risk.machine_number} | {risk.machine_name}"))
-            self.risk_table.setItem(row, 1, self._item(location or "-"))
-            self.risk_table.setItem(row, 2, self._item(risk.risk_level))
-            self.risk_table.setItem(row, 3, self._item(str(risk.risk_score)))
-            self.risk_table.setItem(row, 4, self._item(str(risk.open_issue_count)))
-            self.risk_table.setItem(row, 5, self._item(str(risk.recent_issue_count)))
-            self.risk_table.setItem(row, 6, self._item(preview_text(risk.predicted_problem, 72), risk.predicted_problem))
-            self.risk_table.setItem(row, 7, self._item(preview_text(risk.suggested_action, 86), risk.suggested_action))
-            self.risk_table.setItem(row, 8, self._item(risk.confidence))
-            self.risk_table.setCellWidget(row, 9, self._open_machine_button(risk.machine_number))
-            self.risk_table.setRowHeight(row, 52)
-        self.risk_table.clearSelection()
+        self.risk_table.setUpdatesEnabled(False)
+        self.risk_table.blockSignals(True)
+        try:
+            self.risk_table.setRowCount(0)
+            if not self._visible_risks:
+                self.risk_table.setRowCount(1)
+                self.risk_table.setSpan(0, 0, 1, len(self.RISK_COLUMNS))
+                self.risk_table.setItem(
+                    0,
+                    0,
+                    self._item(
+                        empty_text
+                        or "Not enough issue history yet to generate strong predictions. "
+                        "BeeLine will improve predictions as issues are logged and resolved."
+                    ),
+                )
+                return
+            self.risk_table.clearSpans()
+            self.risk_table.setRowCount(len(self._visible_risks))
+            for row, risk in enumerate(self._visible_risks):
+                location = " / ".join(part for part in (risk.area, risk.cell) if part)
+                self.risk_table.setItem(row, 0, self._item(f"{risk.machine_number} | {risk.machine_name}"))
+                self.risk_table.setItem(row, 1, self._item(location or "-"))
+                self.risk_table.setItem(row, 2, self._item(risk.risk_level))
+                self.risk_table.setItem(row, 3, self._item(str(risk.risk_score)))
+                self.risk_table.setItem(row, 4, self._item(str(risk.open_issue_count)))
+                self.risk_table.setItem(row, 5, self._item(str(risk.recent_issue_count)))
+                self.risk_table.setItem(row, 6, self._item(preview_text(risk.predicted_problem, 72), risk.predicted_problem))
+                self.risk_table.setItem(row, 7, self._item(preview_text(risk.suggested_action, 86), risk.suggested_action))
+                self.risk_table.setItem(row, 8, self._item(risk.confidence))
+                self.risk_table.setCellWidget(row, 9, self._open_machine_button(risk.machine_number))
+                self.risk_table.setRowHeight(row, 52)
+            self.risk_table.clearSelection()
+        finally:
+            self.risk_table.blockSignals(False)
+            self.risk_table.setUpdatesEnabled(True)
+            perf_log("predictive.render_risk_table", rows=len(self._visible_risks), elapsed_ms=elapsed_ms(started_at))
 
-    def _render_alerts(self) -> None:
+    def _render_alerts(self, *, loading: bool = False) -> None:
         self._clear_layout(self.alerts_layout)
         title = QLabel("Predictive Alerts")
         title.setObjectName("sectionTitle")
         self.alerts_layout.addWidget(title)
         if not self._alerts:
             empty = QLabel(
-                "Not enough issue history yet to generate strong predictions. "
+                "Loading predictive alerts..."
+                if loading
+                else "Not enough issue history yet to generate strong predictions. "
                 "BeeLine will improve predictions as issues are logged and resolved."
             )
             empty.setObjectName("mutedLabel")
@@ -332,45 +416,47 @@ class PredictiveMaintenancePage(HoneycombBackground):
         self.alerts_layout.addStretch(1)
 
     def _render_patterns(self, patterns) -> None:
-        self.pattern_table.setRowCount(0)
-        if not patterns:
-            self.pattern_table.setRowCount(1)
-            self.pattern_table.setSpan(0, 0, 1, len(self.PATTERN_COLUMNS))
-            self.pattern_table.setItem(0, 0, self._item("No recurring patterns detected yet."))
-            return
-        self.pattern_table.clearSpans()
-        self.pattern_table.setRowCount(len(patterns))
-        for row, pattern in enumerate(patterns):
-            solution = pattern.common_solutions[0] if pattern.common_solutions else "-"
-            self.pattern_table.setItem(row, 0, self._item(pattern.machine_number))
-            self.pattern_table.setItem(row, 1, self._item(pattern.display_label))
-            self.pattern_table.setItem(row, 2, self._item(str(pattern.occurrence_count)))
-            self.pattern_table.setItem(row, 3, self._item(format_timestamp(pattern.last_seen_at), pattern.last_seen_at))
-            self.pattern_table.setItem(row, 4, self._item(preview_text(solution, 72), solution))
-            self.pattern_table.setItem(row, 5, self._item(pattern.risk_note))
-            self.pattern_table.setRowHeight(row, 48)
+        started_at = perf_now()
+        visible_patterns = list(patterns)[:200]
+        self.pattern_table.setUpdatesEnabled(False)
+        self.pattern_table.blockSignals(True)
+        try:
+            self.pattern_table.setRowCount(0)
+            if not visible_patterns:
+                self.pattern_table.setRowCount(1)
+                self.pattern_table.setSpan(0, 0, 1, len(self.PATTERN_COLUMNS))
+                self.pattern_table.setItem(0, 0, self._item("No recurring patterns detected yet."))
+                return
+            self.pattern_table.clearSpans()
+            self.pattern_table.setRowCount(len(visible_patterns))
+            for row, pattern in enumerate(visible_patterns):
+                solution = pattern.common_solutions[0] if pattern.common_solutions else "-"
+                self.pattern_table.setItem(row, 0, self._item(pattern.machine_number))
+                self.pattern_table.setItem(row, 1, self._item(pattern.display_label))
+                self.pattern_table.setItem(row, 2, self._item(str(pattern.occurrence_count)))
+                self.pattern_table.setItem(row, 3, self._item(format_timestamp(pattern.last_seen_at), pattern.last_seen_at))
+                self.pattern_table.setItem(row, 4, self._item(preview_text(solution, 72), solution))
+                self.pattern_table.setItem(row, 5, self._item(pattern.risk_note))
+                self.pattern_table.setRowHeight(row, 48)
+        finally:
+            self.pattern_table.blockSignals(False)
+            self.pattern_table.setUpdatesEnabled(True)
+            perf_log("predictive.render_patterns", rows=len(visible_patterns), elapsed_ms=elapsed_ms(started_at))
 
     def _render_charts(self) -> None:
-        labels, values = trend_issue_values(
-            self.service.get_global_trend(
-                periods=self.service.settings.grouped_chart_periods,
-            )
-        )
-        self.trend_chart.set_points("Global Issue Trend", labels, values)
+        self.trend_chart.set_points("Global Issue Trend", self._trend_labels, self._trend_values)
         self.breakdown_chart.set_values(
             "Category Breakdown",
-            self.service.get_category_breakdown(days=self.service.settings.risk_window_days),
+            self._category_counts,
         )
 
     def _copy_summary(self) -> None:
-        patterns = self.service.get_recurring_patterns(days=self.service.settings.recurrence_window_days)
-        summary = build_predictive_summary_text(self._risks, self._alerts, patterns)
+        summary = build_predictive_summary_text(self._risks, self._alerts, self._patterns)
         QGuiApplication.clipboard().setText(summary)
         QMessageBox.information(self, "Summary copied", "Predictive maintenance summary copied locally.")
 
     def _export_summary(self) -> None:
-        patterns = self.service.get_recurring_patterns(days=self.service.settings.recurrence_window_days)
-        summary = build_predictive_summary_text(self._risks, self._alerts, patterns)
+        summary = build_predictive_summary_text(self._risks, self._alerts, self._patterns)
         export_dir = self.paths.root_dir / "exports"
         export_dir.mkdir(parents=True, exist_ok=True)
         filename = f"predictive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"

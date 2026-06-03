@@ -473,7 +473,7 @@ class IssueRepository:
 
     def find_related_resolved_issues(self, issue: Issue, limit: int = 5) -> list[ResolvedIssue]:
         keywords = _keywords(issue.title)
-        candidates = self.list_resolved_issues(issue.machine_number, limit=None)
+        candidates = self.list_resolved_issues(issue.machine_number, limit=250)
         scored: list[tuple[int, ResolvedIssue]] = []
         for candidate in candidates:
             score = 0

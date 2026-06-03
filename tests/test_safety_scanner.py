@@ -21,6 +21,13 @@ class SafetyScannerTest(unittest.TestCase):
         )
         self.assertEqual([], safety.scan_text_for_sensitive_content("README.md", text))
 
+    def test_synthetic_perf_seed_safety_text_passes(self) -> None:
+        text = (
+            "Created fake BeeLine performance database. "
+            "No real plant data, operator names, issue descriptions, or archive workbooks were used."
+        )
+        self.assertEqual([], safety.scan_text_for_sensitive_content("scripts/perf_seed.py", text))
+
     def test_fake_email_fails(self) -> None:
         text = "Contact " + "person" + "@example" + ".com for details."
         issues = safety.scan_text_for_sensitive_content("notes.txt", text)
@@ -53,4 +60,3 @@ class SafetyScannerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

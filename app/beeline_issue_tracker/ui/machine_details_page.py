@@ -31,6 +31,7 @@ from beeline_issue_tracker.domain import (
     MachineSummary,
     ResolvedIssue,
 )
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui.charts import BarBreakdownChart, LineTrendChart, RiskScoreBar, trend_issue_values
 from beeline_issue_tracker.ui.issue_list_model import format_timestamp, parse_timestamp, preview_text
 from beeline_issue_tracker.ui.machine_cell import _format_minutes, _format_seconds
@@ -48,6 +49,80 @@ _RISK_SCORE_PATTERN = re.compile(r"(?P<impact>[+-]\d+)\b")
 class ParsedRiskReason:
     text: str
     impact: int | None = None
+
+
+@dataclass(frozen=True)
+class MachineDetailsSnapshot:
+    machine_number: str
+    section: str
+    summary: MachineSummary | None
+    active_issues: list[Issue]
+    resolved_issues: list[ResolvedIssue]
+    stats: MachineResolvedStats | None
+    risk: MachineRiskSummary | None
+    trend: list[object]
+    category_counts: dict[str, int]
+    severity_counts: dict[str, int]
+    patterns_text: str
+
+
+def load_machine_details_snapshot(
+    repository: IssueRepository,
+    predictive_service: PredictiveMaintenanceService | None,
+    machine_number: str,
+    section: str = "overview",
+) -> MachineDetailsSnapshot:
+    started_at = perf_now()
+    call_started = perf_now()
+    summary = repository.get_machine_summary(machine_number)
+    perf_log("details.get_machine_summary", machine=machine_number, elapsed_ms=elapsed_ms(call_started))
+    if summary is None:
+        perf_log("details.snapshot", machine=machine_number, found=False, elapsed_ms=elapsed_ms(started_at))
+        return MachineDetailsSnapshot(machine_number, section, None, [], [], None, None, [], {}, {}, "")
+
+    call_started = perf_now()
+    active_issues = repository.list_active_issues(summary.machine_number, limit=10)
+    perf_log("details.list_active", machine=summary.machine_number, limit=10, elapsed_ms=elapsed_ms(call_started))
+    call_started = perf_now()
+    resolved_issues = repository.list_resolved_issues(summary.machine_number, limit=10)
+    perf_log("details.list_resolved", machine=summary.machine_number, limit=10, elapsed_ms=elapsed_ms(call_started))
+    call_started = perf_now()
+    stats = repository.get_machine_resolved_stats(summary.machine_number)
+    perf_log("details.resolved_stats", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+
+    risk = None
+    trend = []
+    category_counts: dict[str, int] = {}
+    severity_counts: dict[str, int] = {}
+    patterns_text = "No recurring patterns detected yet"
+    if predictive_service is not None:
+        call_started = perf_now()
+        risk = predictive_service.build_machine_risk(summary, active_issues=active_issues, resolved_issues=resolved_issues)
+        perf_log("details.build_risk", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+        call_started = perf_now()
+        trend = predictive_service.get_machine_trend(summary.machine_number, periods=8)
+        perf_log("details.get_trend", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+        call_started = perf_now()
+        category_counts = predictive_service.get_category_breakdown(machine_number=summary.machine_number, days=90)
+        severity_counts = predictive_service.get_severity_breakdown(machine_number=summary.machine_number, days=90)
+        perf_log("details.get_breakdowns", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+        if risk is not None and risk.recurring_issue_count:
+            patterns_text = f"{risk.recurring_issue_count} recurring pattern(s) in recent SQLite history"
+
+    perf_log("details.snapshot", machine=summary.machine_number, found=True, elapsed_ms=elapsed_ms(started_at))
+    return MachineDetailsSnapshot(
+        machine_number=summary.machine_number,
+        section=section,
+        summary=summary,
+        active_issues=active_issues,
+        resolved_issues=resolved_issues,
+        stats=stats,
+        risk=risk,
+        trend=trend,
+        category_counts=category_counts,
+        severity_counts=severity_counts,
+        patterns_text=patterns_text,
+    )
 
 
 class MachineDetailsPage(HoneycombBackground):
@@ -99,31 +174,57 @@ class MachineDetailsPage(HoneycombBackground):
         page.addWidget(self.scroll, 1)
 
     def load_machine(self, machine_number: str, section: str = "overview") -> None:
+        self.apply_snapshot(load_machine_details_snapshot(self.repository, self.predictive_service, machine_number, section))
+
+    def show_loading(self, machine_number: str, section: str = "overview") -> None:
         self.machine_number = machine_number
         self.active_history_list = None
         self.resolved_history_list = None
         self._clear_content()
         self._sections = {}
+        self.brand_header.set_subtitle(f"Machine {machine_number}")
+        self._add_text_panel("Loading", "Loading machine information...", section="overview")
+        panel = self._panel("Issue History", "history")
+        layout = panel.layout()
+        assert layout is not None
+        active_list = IssueListView("active", "Active/Open Issues", "Search active issues...", show_log_action=True)
+        active_list.set_log_action_enabled(self._can_report)
+        active_list.log_issue_requested.connect(lambda: self._request_log_issue(machine_number))
+        active_list.set_query_result([], matched=0, total=0)
+        self.active_history_list = active_list
+        layout.addWidget(active_list)
+        self.content_layout.addWidget(panel)
+        QTimer.singleShot(0, lambda target=section: self._focus_section(target))
 
-        summary = self.repository.get_machine_summary(machine_number)
+    def apply_snapshot(self, snapshot: MachineDetailsSnapshot) -> None:
+        self.machine_number = snapshot.machine_number
+        self.active_history_list = None
+        self.resolved_history_list = None
+        self._clear_content()
+        self._sections = {}
+
+        summary = snapshot.summary
         if summary is None:
-            self.brand_header.set_subtitle(f"Machine {machine_number}")
+            self.brand_header.set_subtitle(f"Machine {snapshot.machine_number}")
             self._add_text_panel("Machine not found", "This machine is not available in the active machine list.")
             return
 
         self.brand_header.set_subtitle(f"Machine {summary.machine_number} | {summary.name}")
-        active_issues = self.repository.list_active_issues(summary.machine_number, limit=10)
-        resolved_issues = self.repository.list_resolved_issues(summary.machine_number, limit=10)
-        stats = self.repository.get_machine_resolved_stats(summary.machine_number)
+        active_issues = snapshot.active_issues
+        resolved_issues = snapshot.resolved_issues
+        stats = snapshot.stats
+        if stats is None:
+            self._add_text_panel("Machine not found", "Resolved issue history is not available for this machine.")
+            return
 
         self._add_summary_hero(summary, active_issues, resolved_issues, summary.open_issue_count, stats.total_resolved)
         self._add_current_status(summary, active_issues, resolved_issues, summary.open_issue_count, stats.total_resolved)
-        self._add_predictive(summary.machine_number)
+        self._add_predictive(snapshot.risk)
         self._add_issue_history(summary.machine_number, active_issues, resolved_issues, stats, summary.open_issue_count)
-        self._add_trends(summary.machine_number)
-        self._add_memory(summary.machine_number, stats, resolved_issues)
+        self._add_trends(snapshot)
+        self._add_memory(stats, resolved_issues, snapshot.patterns_text)
         self.content_layout.addStretch(1)
-        QTimer.singleShot(0, lambda target=section: self._focus_section(target))
+        QTimer.singleShot(0, lambda target=snapshot.section: self._focus_section(target))
 
     def _add_summary_hero(
         self,
@@ -201,11 +302,10 @@ class MachineDetailsPage(HoneycombBackground):
         repolish(panel)
         self.content_layout.addWidget(panel)
 
-    def _add_predictive(self, machine_number: str) -> None:
+    def _add_predictive(self, risk: MachineRiskSummary | None) -> None:
         panel = self._panel("Predictive Maintenance", "predictive")
         layout = panel.layout()
         assert layout is not None
-        risk = self.predictive_service.get_machine_risk(machine_number) if self.predictive_service else None
         if risk is None:
             empty = self._muted(
                 "No predictive data available yet. Machine history will appear here once issues are logged or resolved."
@@ -316,7 +416,7 @@ class MachineDetailsPage(HoneycombBackground):
             total=self.repository.count_total_resolved_issues(self.machine_number),
         )
 
-    def _add_trends(self, machine_number: str) -> None:
+    def _add_trends(self, snapshot: MachineDetailsSnapshot) -> None:
         panel = self._panel("Trends", "trends")
         layout = panel.layout()
         assert layout is not None
@@ -325,12 +425,9 @@ class MachineDetailsPage(HoneycombBackground):
             self.content_layout.addWidget(panel)
             return
 
-        trend = self.predictive_service.get_machine_trend(machine_number, periods=8)
-        category_counts = self.predictive_service.get_category_breakdown(machine_number=machine_number, days=90)
-        severity_counts = self.predictive_service.get_severity_breakdown(machine_number=machine_number, days=90)
-        labels, values = trend_issue_values(trend)
+        labels, values = trend_issue_values(snapshot.trend)
         has_trend_data = any(value > 0 for value in values)
-        if not has_trend_data and not category_counts and not severity_counts:
+        if not has_trend_data and not snapshot.category_counts and not snapshot.severity_counts:
             layout.addWidget(self._muted("No trend data available yet."))
             self.content_layout.addWidget(panel)
             return
@@ -340,23 +437,22 @@ class MachineDetailsPage(HoneycombBackground):
         trend_chart = LineTrendChart(self.theme_manager)
         trend_chart.set_points("Issue Count Over Time", labels if has_trend_data else [], values if has_trend_data else [])
         severity_chart = BarBreakdownChart(self.theme_manager)
-        severity_chart.set_values("Severity Distribution", severity_counts)
+        severity_chart.set_values("Severity Distribution", snapshot.severity_counts)
         category_chart = BarBreakdownChart(self.theme_manager)
-        category_chart.set_values("Category Frequency", category_counts)
+        category_chart.set_values("Category Frequency", snapshot.category_counts)
         chart_row.addWidget(trend_chart, 2)
         chart_row.addWidget(severity_chart, 1)
         chart_row.addWidget(category_chart, 1)
         layout.addLayout(chart_row)
 
-        patterns = _patterns_text(self.predictive_service, machine_number)
-        layout.addWidget(_fact_card("Repeated Failures", patterns))
+        layout.addWidget(_fact_card("Repeated Failures", snapshot.patterns_text))
         self.content_layout.addWidget(panel)
 
     def _add_memory(
         self,
-        machine_number: str,
         stats: MachineResolvedStats,
         resolved_issues: list[ResolvedIssue],
+        patterns_text: str,
     ) -> None:
         panel = self._panel("Troubleshooting Memory", "memory")
         layout = panel.layout()
@@ -379,7 +475,7 @@ class MachineDetailsPage(HoneycombBackground):
         )
         layout.addLayout(_card_grid(cards, columns=3))
         if self.predictive_service is not None:
-            layout.addWidget(_fact_card("Recurring Patterns", _patterns_text(self.predictive_service, machine_number)))
+            layout.addWidget(_fact_card("Recurring Patterns", patterns_text))
         self.content_layout.addWidget(panel)
 
     def set_can_report(self, enabled: bool) -> None:
@@ -606,7 +702,10 @@ def _common_category_text(resolved_issues: list[ResolvedIssue], stats: MachineRe
 
 
 def _patterns_text(service: PredictiveMaintenanceService, machine_number: str) -> str:
-    patterns = service.get_recurring_patterns(machine_number=machine_number)
+    return _patterns_display_text(service.get_recurring_patterns(machine_number=machine_number))
+
+
+def _patterns_display_text(patterns) -> str:
     if not patterns:
         return "No recurring patterns detected yet"
     return " | ".join(f"{pattern.display_label} ({pattern.occurrence_count})" for pattern in patterns[:4])

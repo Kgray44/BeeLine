@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     paths = AppPaths.from_environment()
     if args.create_templates or args.force_templates:
         create_templates(paths, force=args.force_templates)
-    initialize_runtime_files(paths)
+    initialize_runtime_files(paths, include_archive=True)
     print(f"Runtime config: {paths.runtime_config_path}")
     print(f"Runtime SQLite: {paths.db_path}")
     print(f"Runtime archive: {paths.archive_path}")

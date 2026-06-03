@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
 from beeline_issue_tracker.data.archive import ARCHIVE_SHEET
 from beeline_issue_tracker.domain import IssueSearchResult
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,8 @@ def search_excel_archive(
     if not archive_path.exists():
         raise ArchiveSearchError("Archive workbook is missing.")
 
+    started_at = perf_now()
+    perf_log("excel_access", operation="deep_search.load_workbook", path=archive_path)
     terms = _query_terms(query)
     max_results = max(0, min(int(limit), DEEP_SEARCH_HARD_LIMIT))
     seen = set(existing_keys)
@@ -130,6 +133,7 @@ def search_excel_archive(
     workbook = None
     try:
         workbook = load_workbook(archive_path, read_only=True, data_only=True)
+        perf_log("excel_access", operation="deep_search.load_workbook_done", path=archive_path, elapsed_ms=elapsed_ms(started_at))
         if ARCHIVE_SHEET not in workbook.sheetnames:
             raise ArchiveSearchError(f"Archive workbook is missing sheet {ARCHIVE_SHEET!r}.")
         worksheet = workbook[ARCHIVE_SHEET]
@@ -171,6 +175,7 @@ def search_excel_archive(
 
     if batch_callback is not None and batch:
         batch_callback(batch)
+    perf_log("deep_search.excel_complete", results=len(results), elapsed_ms=elapsed_ms(started_at))
     return results
 
 

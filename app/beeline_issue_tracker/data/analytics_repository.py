@@ -20,10 +20,14 @@ class AnalyticsRepository:
         self.db_path = db_path
         self.issue_repository = IssueRepository(db_path)
 
-    def list_all_issue_history(self, machine_number: str | None = None) -> list[IssueHistoryRecord]:
+    def list_all_issue_history(
+        self,
+        machine_number: str | None = None,
+        *,
+        limit: int | None = 5000,
+    ) -> list[IssueHistoryRecord]:
         with connect(self.db_path) as conn:
-            rows = conn.execute(
-                """
+            sql = """
                 SELECT
                     ai.id AS issue_id,
                     ai.id AS original_issue_id,
@@ -64,9 +68,12 @@ class AnalyticsRepository:
                 INNER JOIN machines m ON m.machine_number = ri.machine_number
                 WHERE m.is_active = 1 AND (? IS NULL OR ri.machine_number = ?)
                 ORDER BY created_at DESC, issue_id DESC
-                """,
-                (machine_number, machine_number, machine_number, machine_number),
-            ).fetchall()
+                """
+            params: list[str | int | None] = [machine_number, machine_number, machine_number, machine_number]
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(max(0, int(limit)))
+            rows = conn.execute(sql, params).fetchall()
         return [self._history_from_row(row) for row in rows]
 
     def list_recent_issue_activity(self, days: int = 30) -> list[IssueHistoryRecord]:
@@ -79,6 +86,27 @@ class AnalyticsRepository:
 
     def list_machine_resolved_history(self, machine_number: str, limit: int | None = None) -> list[ResolvedIssue]:
         return self.issue_repository.list_resolved_issues(machine_number, limit=limit)
+
+    def get_machine_risk_input(
+        self,
+        machine_number: str,
+        *,
+        active_limit: int | None = 100,
+        resolved_limit: int | None = 100,
+    ) -> MachineRiskInput | None:
+        machine = self.issue_repository.get_machine_summary(machine_number)
+        if machine is None:
+            return None
+        return MachineRiskInput(
+            machine_number=machine.machine_number,
+            machine_name=machine.name,
+            area=machine.area,
+            cell=machine.cell,
+            asset_tag=machine.asset_tag,
+            display_order=machine.display_order,
+            active_issues=tuple(self.issue_repository.list_active_issues(machine.machine_number, limit=active_limit)),
+            resolved_issues=tuple(self.issue_repository.list_resolved_issues(machine.machine_number, limit=resolved_limit)),
+        )
 
     def list_all_resolved_history(self, limit: int | None = None) -> list[ResolvedIssue]:
         with connect(self.db_path) as conn:
@@ -155,7 +183,12 @@ class AnalyticsRepository:
             samples.append(max(0, int((resolved_at - created).total_seconds() // 60)))
         return samples
 
-    def get_all_machine_risk_inputs(self) -> list[MachineRiskInput]:
+    def get_all_machine_risk_inputs(
+        self,
+        *,
+        active_limit_per_machine: int | None = 100,
+        resolved_limit_per_machine: int | None = 100,
+    ) -> list[MachineRiskInput]:
         inputs: list[MachineRiskInput] = []
         for machine in self.issue_repository.list_machines_with_status():
             inputs.append(
@@ -166,8 +199,18 @@ class AnalyticsRepository:
                     cell=machine.cell,
                     asset_tag=machine.asset_tag,
                     display_order=machine.display_order,
-                    active_issues=tuple(self.issue_repository.list_active_issues(machine.machine_number, limit=None)),
-                    resolved_issues=tuple(self.issue_repository.list_resolved_issues(machine.machine_number, limit=None)),
+                    active_issues=tuple(
+                        self.issue_repository.list_active_issues(
+                            machine.machine_number,
+                            limit=active_limit_per_machine,
+                        )
+                    ),
+                    resolved_issues=tuple(
+                        self.issue_repository.list_resolved_issues(
+                            machine.machine_number,
+                            limit=resolved_limit_per_machine,
+                        )
+                    ),
                 )
             )
         return inputs

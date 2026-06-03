@@ -89,6 +89,172 @@ class MachineInfoPageTest(unittest.TestCase):
         self.assertIn(f"Machine {self.machine_number}", window.machine_details_page.brand_header.subtitle_label.text())
         window.close()
 
+    def test_machine_click_switches_before_repository_load(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        window.show()
+        self.app.processEvents()
+
+        with (
+            patch.object(self.repository, "get_machine_summary", side_effect=AssertionError("machine loaded before navigation")),
+            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+        ):
+            window.show_machine(self.machine_number)
+
+        self.assertIs(window.stack.currentWidget(), window.machine_cell)
+        self.assertEqual(f"Machine {self.machine_number}", window.machine_cell.machine_title.text())
+        self.assertEqual("Loading machine details...", window.machine_cell.machine_subtitle.text())
+        single_shot.assert_called_once()
+        window.stack._clear_animation()
+        window.close()
+
+    def test_cancel_log_issue_does_not_refresh_or_reload(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        window.machine_cell.load_machine(self.machine_number)
+        window.stack.setCurrentWidget(window.machine_cell)
+        window.show_log_issue(self.machine_number)
+
+        with (
+            patch.object(window.dashboard, "refresh") as dashboard_refresh,
+            patch.object(window.machine_cell, "refresh") as machine_refresh,
+            patch.object(window.open_issues_page, "refresh") as open_refresh,
+        ):
+            window.cancel_log_issue()
+
+        dashboard_refresh.assert_not_called()
+        machine_refresh.assert_not_called()
+        open_refresh.assert_not_called()
+        self.assertIs(window.stack.currentWidget(), window.machine_cell)
+        window.stack._clear_animation()
+        window.close()
+
+    def test_dashboard_refresh_is_deferred_until_after_navigation(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        window.stack.setCurrentWidget(window.machine_cell)
+
+        with patch.object(window.dashboard, "refresh") as dashboard_refresh:
+            window.show_dashboard(reason="test_return")
+
+        dashboard_refresh.assert_not_called()
+        self.assertTrue(window._dashboard_refresh_deferred)
+        self.assertIs(window.stack.currentWidget(), window.dashboard)
+        window.stack._clear_animation()
+        window.close()
+
+    def test_open_issues_navigation_switches_before_repository_load(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        with (
+            patch.object(self.repository, "list_machines_with_status", side_effect=AssertionError("open issues loaded before navigation")),
+            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+        ):
+            window.show_open_issues()
+
+        self.assertIs(window.stack.currentWidget(), window.open_issues_page)
+        self.assertEqual("Loading open issues...", window.open_issues_page.empty_label.text())
+        single_shot.assert_called_once()
+        window.stack._clear_animation()
+        window.close()
+
+    def test_predictive_navigation_switches_before_analytics_load(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        with (
+            patch.object(
+                window.predictive_service,
+                "get_all_machine_risks",
+                side_effect=AssertionError("predictive loaded before navigation"),
+            ),
+            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+        ):
+            window.show_predictive_maintenance()
+
+        self.assertIs(window.stack.currentWidget(), window.predictive_page)
+        self.assertEqual("-", window.predictive_page.open_total_pill.value_widget.text())
+        single_shot.assert_called_once()
+        window.stack._clear_animation()
+        window.close()
+
+    def test_machine_details_navigation_switches_before_repository_load(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        with (
+            patch.object(self.repository, "get_machine_summary", side_effect=AssertionError("details loaded before navigation")),
+            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+        ):
+            window.show_machine_details(self.machine_number, "history")
+
+        self.assertIs(window.stack.currentWidget(), window.machine_details_page)
+        self.assertIn(f"Machine {self.machine_number}", window.machine_details_page.brand_header.subtitle_label.text())
+        self.assertGreaterEqual(single_shot.call_count, 1)
+        window.stack._clear_animation()
+        window.close()
+
+    def test_issue_detail_navigation_switches_before_repository_load(self) -> None:
+        issue = self.repository.log_issue(
+            machine_number=self.machine_number,
+            logged_by="Tester",
+            title="Async detail load",
+            description="Detail page should switch before repository work.",
+            severity="Non-Critical",
+            category="Machine",
+        )
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        with (
+            patch.object(
+                self.repository,
+                "get_issue_with_machine_context",
+                side_effect=AssertionError("issue detail loaded before navigation"),
+            ),
+            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+        ):
+            window.show_active_issue_detail(issue.id)
+
+        self.assertIs(window.stack.currentWidget(), window.issue_detail_page)
+        self.assertIn(str(issue.id), window.issue_detail_page.brand_header.subtitle_label.text())
+        single_shot.assert_called_once()
+        window.stack._clear_animation()
+        window.close()
+
+    def test_dashboard_refresh_reuses_existing_card_layout(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        window.dashboard.refresh()
+
+        with patch.object(window.dashboard, "_detach_grid_widgets", wraps=window.dashboard._detach_grid_widgets) as detach:
+            window.dashboard.refresh()
+
+        detach.assert_not_called()
+        self.assertEqual(1, len(window.dashboard._machine_cards))
+        window.close()
+
+    def test_quick_search_does_not_touch_excel(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        window.dashboard.search.setText("anything")
+        window.dashboard.search_mode.setCurrentIndex(window.dashboard.search_mode.findData("quick"))
+
+        with patch("beeline_issue_tracker.data.archive_search.load_workbook") as load_workbook:
+            window.dashboard._render_dashboard()
+
+        load_workbook.assert_not_called()
+        window.close()
+
+    def test_machine_cell_refresh_uses_limited_direct_queries(self) -> None:
+        window = MainWindow(self.repository, self.paths, self.theme_manager)
+        window.machine_cell.machine_number = self.machine_number
+
+        with (
+            patch.object(
+                window.predictive_service.repository.issue_repository,
+                "list_machines_with_status",
+                side_effect=AssertionError("machine page used global predictive scan"),
+            ),
+            patch.object(self.repository, "list_active_issues", wraps=self.repository.list_active_issues) as active,
+            patch.object(self.repository, "list_resolved_issues", wraps=self.repository.list_resolved_issues) as resolved,
+        ):
+            window.machine_cell.refresh()
+
+        for call in active.call_args_list:
+            self.assertEqual(10, call.kwargs.get("limit"))
+        for call in resolved.call_args_list:
+            self.assertEqual(10, call.kwargs.get("limit"))
+        window.close()
+
     def test_machine_info_handles_missing_predictive_service(self) -> None:
         page = MachineDetailsPage(self.repository, self.theme_manager, self.paths, predictive_service=None)
         page.load_machine(self.machine_number, "predictive")

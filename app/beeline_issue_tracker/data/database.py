@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from beeline_issue_tracker.domain import generate_issue_id, issue_id_date_key
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 
 
 ISSUE_ID_MIGRATION_TABLES = ("issues", "active_issues", "resolved_issues_cache")
@@ -177,6 +178,7 @@ def initialize_database(
     db_path: Path,
     machines: tuple[tuple[object, ...], ...] = (),
 ) -> None:
+    started_at = perf_now()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with connect(db_path) as conn:
         # CREATE TABLE IF NOT EXISTS leaves old tables unchanged, so migrate
@@ -222,6 +224,7 @@ def initialize_database(
                 """,
                 machine_rows,
             )
+    perf_log("database.initialize", path=db_path, machines=len(machines), elapsed_ms=elapsed_ms(started_at))
 
 
 def _ensure_machine_metadata_columns(conn: sqlite3.Connection) -> None:

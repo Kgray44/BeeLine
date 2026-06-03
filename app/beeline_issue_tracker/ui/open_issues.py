@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,9 +20,46 @@ from PySide6.QtWidgets import (
 from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.repository import IssueRepository
 from beeline_issue_tracker.domain import ACTIVE_SEVERITIES, Issue, MachineSummary, display_issue_id
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui.issue_list_model import DATE_DESC, format_duration_between, format_timestamp, preview_text
 from beeline_issue_tracker.ui.theme import ThemeManager
 from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground, LatestCountDropdown, SearchBox, StatusBadge
+
+
+@dataclass(frozen=True)
+class OpenIssuesSnapshot:
+    machines: list[MachineSummary]
+    issues: list[Issue]
+
+
+def load_open_issues_snapshot(
+    repository: IssueRepository,
+    *,
+    query: str = "",
+    severity: str | None = None,
+    machine_number: str | None = None,
+    area: str | None = None,
+    cell: str | None = None,
+    sort_key: str = DATE_DESC,
+    limit: int | None = 50,
+) -> OpenIssuesSnapshot:
+    started_at = perf_now()
+    call_started = perf_now()
+    machines = repository.list_machines_with_status()
+    perf_log("open_issues.list_machines", count=len(machines), elapsed_ms=elapsed_ms(call_started))
+    call_started = perf_now()
+    issues = repository.list_all_active_issues(
+        query=query,
+        severity=severity,
+        machine_number=machine_number,
+        area=area,
+        cell=cell,
+        sort_key=sort_key,
+        limit=limit,
+    )
+    perf_log("open_issues.list_active", count=len(issues), limit=limit, elapsed_ms=elapsed_ms(call_started))
+    perf_log("open_issues.snapshot", elapsed_ms=elapsed_ms(started_at))
+    return OpenIssuesSnapshot(machines=machines, issues=issues)
 
 
 class OpenIssuesPage(HoneycombBackground):
@@ -140,19 +179,30 @@ class OpenIssuesPage(HoneycombBackground):
         self._configure_table()
 
     def refresh(self) -> None:
-        self._machines = self.repository.list_machines_with_status()
+        self.apply_snapshot(load_open_issues_snapshot(self.repository, **self.current_query()))
+
+    def show_loading(self) -> None:
+        self.empty_label.setVisible(True)
+        self.empty_label.setText("Loading open issues...")
+        self.table.setVisible(False)
+        self._visible_issues = []
+
+    def current_query(self) -> dict[str, object]:
+        return {
+            "query": self.search.text(),
+            "severity": self.severity.currentData() or None,
+            "machine_number": self.machine_filter.currentData() or None,
+            "area": self.area_filter.currentData() or None,
+            "cell": self.cell_filter.currentData() or None,
+            "sort_key": self.sort.currentData() or DATE_DESC,
+            "limit": self.latest.currentData(),
+        }
+
+    def apply_snapshot(self, snapshot: OpenIssuesSnapshot) -> None:
+        self._machines = list(snapshot.machines)
         self._machine_map = {machine.machine_number: machine for machine in self._machines}
         self._update_filter_options()
-        issues = self.repository.list_all_active_issues(
-            query=self.search.text(),
-            severity=self.severity.currentData() or None,
-            machine_number=self.machine_filter.currentData() or None,
-            area=self.area_filter.currentData() or None,
-            cell=self.cell_filter.currentData() or None,
-            sort_key=self.sort.currentData() or DATE_DESC,
-            limit=self.latest.currentData(),
-        )
-        self._populate_table(issues)
+        self._populate_table(list(snapshot.issues))
 
     def _configure_table(self) -> None:
         header = self.table.horizontalHeader()
@@ -195,6 +245,7 @@ class OpenIssuesPage(HoneycombBackground):
         combo.blockSignals(False)
 
     def _populate_table(self, issues: list[Issue]) -> None:
+        started_at = perf_now()
         self.table.setUpdatesEnabled(False)
         self.table.blockSignals(True)
         try:
@@ -224,6 +275,7 @@ class OpenIssuesPage(HoneycombBackground):
         finally:
             self.table.blockSignals(False)
             self.table.setUpdatesEnabled(True)
+            perf_log("open_issues.render_table", rows=len(issues), elapsed_ms=elapsed_ms(started_at))
 
     def _queue_search_refresh(self) -> None:
         self._search_timer.start()

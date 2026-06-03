@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from beeline_issue_tracker.analytics.models import (
     FixSuggestion,
+    MachineRiskInput,
     MachineRiskSummary,
     MachineTrendPoint,
     PredictiveMaintenanceAlert,
@@ -21,7 +22,7 @@ from beeline_issue_tracker.analytics.risk_engine import (
 from beeline_issue_tracker.analytics.text_match import build_fix_suggestions, find_related_resolved_issues
 from beeline_issue_tracker.config import AnalyticsConfig
 from beeline_issue_tracker.data.analytics_repository import AnalyticsRepository, build_trend_points_from_records
-from beeline_issue_tracker.domain import Issue
+from beeline_issue_tracker.domain import Issue, MachineSummary, ResolvedIssue
 
 
 class PredictiveMaintenanceService:
@@ -48,10 +49,33 @@ class PredictiveMaintenanceService:
     def get_machine_risk(self, machine_number: str) -> MachineRiskSummary | None:
         if not self.settings.enabled:
             return None
-        for risk_input in self.repository.get_all_machine_risk_inputs():
-            if risk_input.machine_number == machine_number:
-                return build_machine_risk_summary(risk_input, now=self._now())
-        return None
+        risk_input = self.repository.get_machine_risk_input(machine_number)
+        if risk_input is None:
+            return None
+        return build_machine_risk_summary(risk_input, now=self._now())
+
+    def build_machine_risk(
+        self,
+        machine: MachineSummary,
+        *,
+        active_issues: list[Issue] | tuple[Issue, ...],
+        resolved_issues: list[ResolvedIssue] | tuple[ResolvedIssue, ...],
+    ) -> MachineRiskSummary | None:
+        if not self.settings.enabled:
+            return None
+        return build_machine_risk_summary(
+            MachineRiskInput(
+                machine_number=machine.machine_number,
+                machine_name=machine.name,
+                area=machine.area,
+                cell=machine.cell,
+                asset_tag=machine.asset_tag,
+                display_order=machine.display_order,
+                active_issues=tuple(active_issues),
+                resolved_issues=tuple(resolved_issues),
+            ),
+            now=self._now(),
+        )
 
     def get_predictive_alerts(self, limit: int = 20) -> list[PredictiveMaintenanceAlert]:
         if not self.settings.enabled:
@@ -127,7 +151,12 @@ class PredictiveMaintenanceService:
         if not self.settings.enabled:
             return []
         patterns: list[RecurringIssuePattern] = []
-        for risk_input in self.repository.get_all_machine_risk_inputs():
+        if machine_number:
+            risk_input = self.repository.get_machine_risk_input(machine_number)
+            risk_inputs = (risk_input,) if risk_input is not None else ()
+        else:
+            risk_inputs = self.repository.get_all_machine_risk_inputs()
+        for risk_input in risk_inputs:
             if machine_number and risk_input.machine_number != machine_number:
                 continue
             issues = list(risk_input.active_issues) + list(risk_input.resolved_issues)

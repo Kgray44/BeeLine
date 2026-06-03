@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -17,6 +18,8 @@ from PySide6.QtWidgets import (
 from beeline_issue_tracker.analytics.predictive_service import PredictiveMaintenanceService
 from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.repository import IssueRepository
+from beeline_issue_tracker.domain import Issue, MachineResolvedStats, MachineSummary, ResolvedIssue
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui.charts import RiskScoreBar
 from beeline_issue_tracker.ui.theme import ThemeManager, repolish, status_state
 from beeline_issue_tracker.ui.widgets import (
@@ -29,6 +32,117 @@ from beeline_issue_tracker.ui.widgets import (
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MachineCellQuery:
+    active_query: str = ""
+    active_sort: str = "date_desc"
+    active_limit: int = 10
+    active_offset: int = 0
+    resolved_query: str = ""
+    resolved_sort: str = "date_desc"
+    resolved_limit: int = 10
+    resolved_offset: int = 0
+
+
+@dataclass(frozen=True)
+class MachineCellSnapshot:
+    machine_number: str
+    summary: MachineSummary | None
+    active_issues: list[Issue]
+    active_matched: int
+    resolved_issues: list[ResolvedIssue]
+    resolved_matched: int
+    stats: MachineResolvedStats | None
+    risk: object | None = None
+
+
+def load_machine_cell_snapshot(
+    repository: IssueRepository,
+    predictive_service: PredictiveMaintenanceService | None,
+    machine_number: str,
+    criteria: MachineCellQuery,
+) -> MachineCellSnapshot:
+    started_at = perf_now()
+    call_started = perf_now()
+    summary = repository.get_machine_summary(machine_number)
+    perf_log("repo.get_machine_summary", machine=machine_number, elapsed_ms=elapsed_ms(call_started))
+    if summary is None:
+        perf_log("machine.snapshot", machine=machine_number, found=False, elapsed_ms=elapsed_ms(started_at))
+        return MachineCellSnapshot(machine_number, None, [], 0, [], 0, None, None)
+
+    call_started = perf_now()
+    active_issues = repository.list_active_issues(
+        summary.machine_number,
+        query=criteria.active_query,
+        sort_key=criteria.active_sort,
+        limit=criteria.active_limit,
+        offset=criteria.active_offset,
+    )
+    perf_log(
+        "repo.list_active_issues",
+        machine=summary.machine_number,
+        limit=criteria.active_limit,
+        offset=criteria.active_offset,
+        elapsed_ms=elapsed_ms(call_started),
+    )
+
+    call_started = perf_now()
+    resolved_issues = repository.list_resolved_issues(
+        summary.machine_number,
+        query=criteria.resolved_query,
+        sort_key=criteria.resolved_sort,
+        limit=criteria.resolved_limit,
+        offset=criteria.resolved_offset,
+    )
+    perf_log(
+        "repo.list_resolved_issues",
+        machine=summary.machine_number,
+        limit=criteria.resolved_limit,
+        offset=criteria.resolved_offset,
+        elapsed_ms=elapsed_ms(call_started),
+    )
+
+    call_started = perf_now()
+    stats = repository.get_machine_resolved_stats(summary.machine_number)
+    perf_log("repo.get_machine_resolved_stats", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+
+    if criteria.active_query.strip():
+        call_started = perf_now()
+        active_matched = repository.count_active_issues_matching(summary.machine_number, criteria.active_query)
+        perf_log("repo.count_active_issues_matching", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+    else:
+        active_matched = summary.open_issue_count
+
+    if criteria.resolved_query.strip():
+        call_started = perf_now()
+        resolved_matched = repository.count_resolved_issues_matching(summary.machine_number, criteria.resolved_query)
+        perf_log("repo.count_resolved_issues_matching", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+    else:
+        resolved_matched = stats.total_resolved
+
+    risk = None
+    if predictive_service is not None:
+        call_started = perf_now()
+        risk = predictive_service.build_machine_risk(
+            summary,
+            active_issues=active_issues,
+            resolved_issues=resolved_issues,
+        )
+        perf_log("predictive.build_machine_risk", machine=summary.machine_number, elapsed_ms=elapsed_ms(call_started))
+
+    perf_log("machine.snapshot", machine=summary.machine_number, found=True, elapsed_ms=elapsed_ms(started_at))
+    return MachineCellSnapshot(
+        machine_number=summary.machine_number,
+        summary=summary,
+        active_issues=active_issues,
+        active_matched=active_matched,
+        resolved_issues=resolved_issues,
+        resolved_matched=resolved_matched,
+        stats=stats,
+        risk=risk,
+    )
 
 
 class MachineCellPage(HoneycombBackground):
@@ -206,7 +320,32 @@ class MachineCellPage(HoneycombBackground):
 
     def load_machine(self, machine_number: str) -> None:
         self.machine_number = machine_number
-        self.refresh()
+        self.apply_snapshot(
+            load_machine_cell_snapshot(
+                self.repository,
+                self.predictive_service,
+                machine_number,
+                self.current_query(),
+            )
+        )
+
+    def show_loading(self, machine_number: str) -> None:
+        self.machine_number = machine_number
+        self.machine_title.setText(f"Machine {machine_number}")
+        self.machine_subtitle.setText("Loading machine details...")
+        self.machine_meta.setText("")
+        self.status_badge.set_status("Unknown/Error")
+        self.machine_header.setProperty("statusState", "unknown")
+        repolish(self.machine_header)
+        self.area_pill.set_value("-")
+        self.cell_pill.set_value("-")
+        self.asset_pill.set_value("-")
+        self.open_issue_pill.set_value("-")
+        self.recent_resolved_pill.set_value("-")
+        self.memory_summary.setText("Loading recent issue history...")
+        self._set_intelligence_loading()
+        self.active_list.set_query_result([], matched=0, total=0)
+        self.resolved_list.set_query_result([], matched=0, total=0)
 
     def set_can_report(self, enabled: bool) -> None:
         self.active_list.set_log_action_enabled(enabled)
@@ -214,8 +353,39 @@ class MachineCellPage(HoneycombBackground):
     def refresh(self) -> None:
         if not self.machine_number:
             return
+        self.apply_snapshot(
+            load_machine_cell_snapshot(
+                self.repository,
+                self.predictive_service,
+                self.machine_number,
+                self.current_query(),
+            )
+        )
 
-        summary = self.repository.get_machine_summary(self.machine_number)
+    def current_query(self) -> MachineCellQuery:
+        active_query, active_sort, active_limit, active_offset = self.active_list.criteria()
+        resolved_query, resolved_sort, resolved_limit, resolved_offset = self.resolved_list.criteria()
+        return MachineCellQuery(
+            active_query=active_query,
+            active_sort=active_sort,
+            active_limit=active_limit,
+            active_offset=active_offset,
+            resolved_query=resolved_query,
+            resolved_sort=resolved_sort,
+            resolved_limit=resolved_limit,
+            resolved_offset=resolved_offset,
+        )
+
+    def apply_snapshot(self, snapshot: MachineCellSnapshot) -> None:
+        if self.machine_number != snapshot.machine_number:
+            perf_log(
+                "machine.apply_snapshot_skipped",
+                current=self.machine_number,
+                snapshot=snapshot.machine_number,
+            )
+            return
+
+        summary = snapshot.summary
         if summary is None:
             self.machine_title.setText("Machine not found")
             self.machine_subtitle.setText("")
@@ -241,42 +411,22 @@ class MachineCellPage(HoneycombBackground):
         self.machine_header.setProperty("statusState", status_state(summary.calculated_status))
         repolish(self.machine_header)
 
-        active_query, active_sort, active_limit, active_offset = self.active_list.criteria()
-        resolved_query, resolved_sort, resolved_limit, resolved_offset = self.resolved_list.criteria()
-        active_issues = self.repository.list_active_issues(
-            summary.machine_number,
-            query=active_query,
-            sort_key=active_sort,
-            limit=active_limit,
-            offset=active_offset,
-        )
-        recent_resolved = self.repository.list_resolved_issues(
-            summary.machine_number,
-            query=resolved_query,
-            sort_key=resolved_sort,
-            limit=resolved_limit,
-            offset=resolved_offset,
-        )
-        active_matched = self.repository.count_active_issues_matching(summary.machine_number, active_query)
-        resolved_matched = self.repository.count_resolved_issues_matching(summary.machine_number, resolved_query)
-        stats = self.repository.get_machine_resolved_stats(summary.machine_number)
-
         self.area_pill.set_value(summary.area)
         self.cell_pill.set_value(summary.cell)
         self.asset_pill.set_value(summary.asset_tag)
         self.open_issue_pill.set_value(str(summary.open_issue_count))
-        self.recent_resolved_pill.set_value(str(stats.total_resolved))
-        self.memory_summary.setText(_memory_text(stats))
-        self._update_intelligence(summary.machine_number)
+        self.recent_resolved_pill.set_value(str(snapshot.stats.total_resolved if snapshot.stats is not None else 0))
+        self.memory_summary.setText(_memory_text(snapshot.stats) if snapshot.stats is not None else "No resolved history yet.")
+        self._apply_intelligence(snapshot.risk)
         self.active_list.set_query_result(
-            active_issues,
-            matched=active_matched,
+            snapshot.active_issues,
+            matched=snapshot.active_matched,
             total=summary.open_issue_count,
         )
         self.resolved_list.set_query_result(
-            recent_resolved,
-            matched=resolved_matched,
-            total=stats.total_resolved,
+            snapshot.resolved_issues,
+            matched=snapshot.resolved_matched,
+            total=snapshot.stats.total_resolved if snapshot.stats is not None else 0,
         )
 
     def _request_log_issue(self) -> None:
@@ -288,11 +438,7 @@ class MachineCellPage(HoneycombBackground):
         if self.machine_number:
             self.machine_details_requested.emit(self.machine_number, section)
 
-    def _update_intelligence(self, machine_number: str) -> None:
-        if self.predictive_service is None:
-            self._set_intelligence_empty()
-            return
-        risk = self.predictive_service.get_machine_risk(machine_number)
+    def _apply_intelligence(self, risk) -> None:
         if risk is None:
             self._set_intelligence_empty()
             return
@@ -305,6 +451,15 @@ class MachineCellPage(HoneycombBackground):
         avg = _format_minutes(risk.average_time_open_minutes)
         last_issue = risk.last_issue_at or "-"
         self.intelligence_last_issue.setText(f"{last_issue} | Avg open: {avg}")
+
+    def _set_intelligence_loading(self) -> None:
+        self.risk_score_bar.set_score(0, "Unknown")
+        self.intelligence_confidence.setText("Loading")
+        self.intelligence_predicted_problem.setText("Loading machine intelligence...")
+        self.intelligence_suggested_action.setText("Loading")
+        self.intelligence_reasons.setText("Loading")
+        self.intelligence_recurring.setText("-")
+        self.intelligence_last_issue.setText("-")
 
     def _set_intelligence_empty(self) -> None:
         self.risk_score_bar.set_score(0, "Unknown")

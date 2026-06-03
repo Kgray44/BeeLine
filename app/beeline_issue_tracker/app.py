@@ -11,6 +11,7 @@ from beeline_issue_tracker.data.archive import inspect_archive, refresh_archive_
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
 from beeline_issue_tracker.domain import display_issue_id
+from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui.main_window import MainWindow
 from beeline_issue_tracker.ui.theme import ThemeManager
 
@@ -87,7 +88,7 @@ def print_startup_archive_health(paths: AppPaths, repository: IssueRepository) -
     counts = repository.archive_status_counts()
 
     print(f"Excel archive path: {paths.archive_path}")
-    print(f"Archive path exists: {'yes' if paths.archive_path.exists() else 'no'}")
+    print("Archive workbook check: skipped during normal startup")
     if counts:
         summary = ", ".join(f"{status}={count}" for status, count in counts.items())
         print(f"SQLite archive statuses: {summary}")
@@ -108,6 +109,7 @@ def print_startup_archive_health(paths: AppPaths, repository: IssueRepository) -
 
 
 def main(argv: list[str] | None = None) -> int:
+    started_at = perf_now()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     args = build_parser().parse_args(argv)
     paths = AppPaths.from_environment()
@@ -146,4 +148,5 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(repository, paths, theme_manager, runtime_config)
     window.show()
+    perf_log("app.startup_ready", elapsed_ms=elapsed_ms(started_at))
     return app.exec()
