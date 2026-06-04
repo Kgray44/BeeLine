@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from dataclasses import dataclass
-import re
 from typing import Iterable
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -35,6 +34,7 @@ from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_
 from beeline_issue_tracker.ui_v2.charts import BarBreakdownChart, LineTrendChart, RiskScoreBar, trend_issue_values
 from beeline_issue_tracker.ui_v2.issue_list_model import format_timestamp, parse_timestamp, preview_text
 from beeline_issue_tracker.ui_v2.machine_cell import _format_minutes, _format_seconds
+from beeline_issue_tracker.ui_v2.risk_widgets import create_risk_reason_row, parse_risk_reasons
 from beeline_issue_tracker.ui_v2.theme import ThemeManager, repolish, status_state
 from beeline_issue_tracker.ui_v2.widgets import BrandHeader, HoneycombBackground, IssueListView, StatusBadge
 
@@ -42,13 +42,6 @@ from beeline_issue_tracker.ui_v2.widgets import BrandHeader, HoneycombBackground
 logger = logging.getLogger(__name__)
 
 NO_DATA_TEXT = "No data available"
-_RISK_SCORE_PATTERN = re.compile(r"(?P<impact>[+-]\d+)\b")
-
-
-@dataclass(frozen=True)
-class ParsedRiskReason:
-    text: str
-    impact: int | None = None
 
 
 @dataclass(frozen=True)
@@ -342,7 +335,7 @@ class MachineDetailsPage(HoneycombBackground):
         reasons = parse_risk_reasons(risk.risk_reasons)
         if reasons:
             for reason in reasons:
-                layout.addWidget(_risk_reason_row(reason))
+                layout.addWidget(create_risk_reason_row(reason))
         else:
             layout.addWidget(self._muted("No risk reasons are available yet."))
         self.content_layout.addWidget(panel)
@@ -532,43 +525,6 @@ class MachineDetailsPage(HoneycombBackground):
                 _clear_layout(child_layout)
 
 
-def parse_risk_reasons(
-    reasons: str | Iterable[str],
-    *,
-    sort_by_impact: bool = True,
-) -> list[ParsedRiskReason]:
-    parts: list[str] = []
-    if isinstance(reasons, str):
-        sources = (reasons,)
-    else:
-        sources = tuple(str(reason) for reason in reasons)
-    for source in sources:
-        parts.extend(part.strip() for part in source.split("|") if part.strip())
-
-    parsed: list[ParsedRiskReason] = []
-    for part in parts:
-        matches = list(_RISK_SCORE_PATTERN.finditer(part))
-        if not matches:
-            parsed.append(ParsedRiskReason(text=part))
-            continue
-        match = matches[-1]
-        impact = int(match.group("impact"))
-        text = f"{part[:match.start()]}{part[match.end():]}".strip().rstrip(":- ")
-        parsed.append(ParsedRiskReason(text=text or part, impact=impact))
-
-    if not sort_by_impact or not any(reason.impact is not None for reason in parsed):
-        return parsed
-
-    indexed = enumerate(parsed)
-    return [
-        reason
-        for _index, reason in sorted(
-            indexed,
-            key=lambda item: (item[1].impact is None, -(item[1].impact or 0), item[0]),
-        )
-    ]
-
-
 def _risk_score_card(risk: MachineRiskSummary, theme_manager: ThemeManager) -> QFrame:
     card = QFrame()
     card.setObjectName("riskCard")
@@ -585,28 +541,6 @@ def _risk_score_card(risk: MachineRiskSummary, theme_manager: ThemeManager) -> Q
     layout.addWidget(score)
     layout.addWidget(bar)
     return card
-
-
-def _risk_reason_row(reason: ParsedRiskReason) -> QFrame:
-    row = QFrame()
-    row.setObjectName("riskReasonRow")
-    impact_state = _risk_impact_state(reason.impact)
-    row.setProperty("impactState", impact_state)
-    layout = QHBoxLayout(row)
-    layout.setContentsMargins(12, 9, 12, 9)
-    layout.setSpacing(10)
-    if reason.impact is not None:
-        score = QLabel(_impact_text(reason.impact))
-        score.setObjectName("reasonScoreBadge")
-        score.setProperty("impactState", impact_state)
-        score.setMinimumWidth(56)
-        score.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(score)
-    text = QLabel(reason.text or NO_DATA_TEXT)
-    text.setWordWrap(True)
-    layout.addWidget(text, 1)
-    repolish(row)
-    return row
 
 
 def _fact_card(label: str, value: str | None, *, status: str | None = None) -> QFrame:
@@ -727,20 +661,6 @@ def _risk_level_label(risk_level: str) -> str:
     if risk_level == RISK_MEDIUM:
         return "Moderate"
     return risk_level or "Unknown"
-
-
-def _risk_impact_state(impact: int | None) -> str:
-    if impact is None:
-        return "low"
-    if impact >= 25:
-        return "high"
-    if impact >= 10:
-        return "medium"
-    return "low"
-
-
-def _impact_text(impact: int) -> str:
-    return f"+{impact}" if impact > 0 else str(impact)
 
 
 def _display(value: str | None) -> str:

@@ -316,6 +316,47 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         background-color: {tokens.status_non_critical};
     }}
 
+    QPushButton#secondaryButton {{
+        background-color: {tokens.background_subtle};
+        border-color: {tokens.accent_muted};
+        color: {tokens.text_primary};
+        font-weight: 750;
+    }}
+
+    QPushButton#secondaryButton:hover {{
+        border-color: {tokens.accent};
+        background-color: {tokens.panel_hover};
+    }}
+
+    QPushButton#quietButton {{
+        background-color: transparent;
+        border-color: {tokens.border};
+        color: {tokens.text_secondary};
+        font-weight: 650;
+    }}
+
+    QPushButton#quietButton:hover {{
+        border-color: {tokens.accent_muted};
+        color: {tokens.text_primary};
+        background-color: {tokens.background_subtle};
+    }}
+
+    QPushButton#sectionNavButton {{
+        background-color: transparent;
+        border-color: {tokens.border};
+        color: {tokens.text_secondary};
+        padding: 7px 12px;
+        font-size: 14px;
+        font-weight: 750;
+    }}
+
+    QPushButton#sectionNavButton:hover,
+    QPushButton#sectionNavButton[active="true"] {{
+        background-color: {tokens.accent_muted};
+        border-color: {tokens.accent};
+        color: {tokens.text_primary};
+    }}
+
     QPushButton#sectionPrimaryButton {{
         padding: 8px 13px;
         font-size: 15px;
@@ -332,7 +373,8 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         background-color: transparent;
         border-color: {tokens.accent};
         color: {tokens.accent};
-        padding: 6px 10px;
+        min-height: 28px;
+        padding: 6px 11px;
         font-size: 14px;
         font-weight: 750;
     }}
@@ -388,16 +430,24 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
     QFrame#formPanel,
     QFrame#machineHeader,
     QFrame#listPanel,
-    QFrame#summaryHero {{
+    QFrame#summaryHero,
+    QFrame#emptyStatePanel,
+    QFrame#alertCard {{
         background-color: {tokens.panel};
         border: 1px solid {tokens.border};
         border-radius: 8px;
     }}
 
+    QFrame#emptyStatePanel {{
+        background-color: {tokens.background_subtle};
+        border-style: dashed;
+    }}
+
     QFrame#metricPill,
     QFrame#factCard,
     QFrame#riskCard,
-    QFrame#riskReasonRow {{
+    QFrame#riskReasonRow,
+    QFrame#alertReasonRow {{
         background-color: {tokens.background_subtle};
         border: 1px solid {tokens.border};
         border-radius: 8px;
@@ -411,11 +461,23 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         border-left: 5px solid {tokens.status_line_down};
     }}
 
+    QFrame#alertReasonRow[impactState="high"] {{
+        border-left: 5px solid {tokens.status_line_down};
+    }}
+
     QFrame#riskReasonRow[impactState="medium"] {{
         border-left: 5px solid {tokens.status_non_critical};
     }}
 
+    QFrame#alertReasonRow[impactState="medium"] {{
+        border-left: 5px solid {tokens.status_non_critical};
+    }}
+
     QFrame#riskReasonRow[impactState="low"] {{
+        border-left: 5px solid {tokens.status_unknown};
+    }}
+
+    QFrame#alertReasonRow[impactState="low"] {{
         border-left: 5px solid {tokens.status_unknown};
     }}
 

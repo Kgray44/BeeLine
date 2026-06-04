@@ -198,6 +198,31 @@ class StatusBadge(QLabel):
             repolish(self)
 
 
+class EmptyStatePanel(QFrame):
+    def __init__(self, title: str = "", body: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("emptyStatePanel")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(4)
+
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("smallSectionTitle")
+        self.title_label.setWordWrap(True)
+        layout.addWidget(self.title_label)
+
+        self.body_label = QLabel(body)
+        self.body_label.setObjectName("mutedLabel")
+        self.body_label.setWordWrap(True)
+        layout.addWidget(self.body_label)
+
+    def set_text(self, title: str, body: str = "") -> None:
+        self.title_label.setText(title)
+        self.body_label.setText(body)
+        self.body_label.setVisible(bool(body))
+
+
 class ThemeToggleButton(QPushButton):
     def __init__(self, theme_manager: ThemeManager, parent=None):
         super().__init__(parent)
@@ -556,11 +581,8 @@ class IssueListView(QFrame):
         self.toolbar.log_issue_requested.connect(self.log_issue_requested.emit)
         layout.addWidget(self.toolbar)
 
-        self.empty_label = QLabel()
-        self.empty_label.setObjectName("mutedLabel")
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setMinimumHeight(46)
-        layout.addWidget(self.empty_label)
+        self.empty_panel = EmptyStatePanel()
+        layout.addWidget(self.empty_panel)
 
         self.table = QTableWidget()
         self.table.setObjectName("issueTable")
@@ -572,7 +594,7 @@ class IssueListView(QFrame):
         self.table.setWordWrap(False)
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.table.setMinimumHeight(284)
+        self.table.setMinimumHeight(0)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.itemDoubleClicked.connect(self._open_table_item)
@@ -588,7 +610,7 @@ class IssueListView(QFrame):
         self.card_layout.setContentsMargins(0, 0, 0, 0)
         self.card_layout.setSpacing(10)
         self.card_scroll.setWidget(self.card_host)
-        self.card_scroll.setMinimumHeight(284)
+        self.card_scroll.setMinimumHeight(0)
         layout.addWidget(self.card_scroll, 1)
         self.card_scroll.hide()
 
@@ -636,10 +658,10 @@ class IssueListView(QFrame):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
 
         if self.include_resolved_fields:
-            widths = (150, 180, 148, 280, 280, 118, 118, 146, 100, 116, 110)
+            widths = (150, 180, 148, 280, 280, 118, 118, 146, 100, 116, 190)
             stretch_columns = (3, 4)
         else:
-            widths = (150, 200, 126, 340, 120, 146, 86, 120, 180)
+            widths = (150, 200, 126, 340, 120, 146, 86, 120, 210)
             stretch_columns = (3,)
 
         for column, width in enumerate(widths):
@@ -674,20 +696,25 @@ class IssueListView(QFrame):
         self._clear_cards()
         self.table.setRowCount(0)
         self._visible_table_issues = []
-        self.empty_label.setVisible(len(visible) == 0)
+        self.empty_panel.setVisible(len(visible) == 0)
         self.table.setVisible(False)
         self.card_scroll.setVisible(False)
         if len(visible) == 0:
-            self.empty_label.setText(self._empty_text(has_query=bool(query.strip())))
+            title, body = self._empty_text(has_query=bool(query.strip()))
+            self.empty_panel.set_text(title, body)
+            self._adjust_table_height(0)
+            self.card_scroll.setMaximumHeight(0)
             return
 
         if self.toolbar.display_mode.currentData() == "kiosk":
             self._populate_cards(visible)
+            self._adjust_card_height(len(visible))
             self.card_scroll.setVisible(True)
             return
 
         self.table.setVisible(True)
         self._populate_table(visible)
+        self._adjust_table_height(len(visible))
 
     def _populate_table(self, visible: list[Issue | ResolvedIssue]) -> None:
         self.table.setUpdatesEnabled(False)
@@ -729,7 +756,7 @@ class IssueListView(QFrame):
         self.table.setItem(row, 4, self._item(issue.logged_by))
         self.table.setItem(row, 5, self._item(format_timestamp(issue.created_at), issue.created_at))
         self.table.setItem(row, 6, self._item(format_duration_between(issue.created_at)))
-        self.table.setItem(row, 7, self._item(issue.category or "-"))
+        self.table.setItem(row, 7, self._item(issue.category or "-", issue.category or None))
 
         view_button = QPushButton("Open")
         view_button.setObjectName("tableActionButton")
@@ -749,7 +776,7 @@ class IssueListView(QFrame):
         self.table.setItem(row, 6, self._item(issue.resolved_by or "-"))
         self.table.setItem(row, 7, self._item(format_timestamp(issue.resolved_at), issue.resolved_at))
         self.table.setItem(row, 8, self._item(format_duration_between(issue.created_at, issue.resolved_at)))
-        self.table.setItem(row, 9, self._item(issue.category or "-"))
+        self.table.setItem(row, 9, self._item(issue.category or "-", issue.category or None))
         view_button = QPushButton("Open")
         view_button.setObjectName("tableActionButton")
         view_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self._emit_open("resolved", issue_id))
@@ -769,12 +796,34 @@ class IssueListView(QFrame):
         self.open_requested.emit(mode, issue_id)
         self.detail_requested.emit(issue_id, mode)
 
-    def _empty_text(self, *, has_query: bool) -> str:
+    def _empty_text(self, *, has_query: bool) -> tuple[str, str]:
         if has_query:
-            return "No issues match the current search."
+            return ("No matching issues found", "Try a different keyword, machine number, category, or status.")
         if self.include_resolved_fields:
-            return "No resolved issues yet."
-        return "No active issues."
+            return ("No resolved history yet", "Troubleshooting memory will appear here after issues are resolved.")
+        return ("No active issues", "This machine is currently clear.")
+
+    def _adjust_table_height(self, visible_count: int) -> None:
+        if visible_count <= 0:
+            self.table.setMinimumHeight(0)
+            self.table.setMaximumHeight(0)
+            return
+        header_height = self.table.horizontalHeader().height() or 38
+        row_height = 62
+        padding = 14
+        visible_rows = min(visible_count, 5)
+        height = header_height + visible_rows * row_height + padding
+        self.table.setMinimumHeight(height)
+        self.table.setMaximumHeight(height if visible_count <= 3 else 16777215)
+
+    def _adjust_card_height(self, visible_count: int) -> None:
+        if visible_count <= 0:
+            self.card_scroll.setMaximumHeight(0)
+            return
+        visible_rows = min(visible_count, 3)
+        height = visible_rows * 150 + 24
+        self.card_scroll.setMinimumHeight(height)
+        self.card_scroll.setMaximumHeight(height if visible_count <= 2 else 16777215)
 
     @staticmethod
     def _item(text: str, tooltip: str | None = None) -> QTableWidgetItem:
