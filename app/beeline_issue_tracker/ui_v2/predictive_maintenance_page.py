@@ -43,8 +43,9 @@ from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui_v2.charts import BarBreakdownChart, LineTrendChart, trend_issue_values
 from beeline_issue_tracker.ui_v2.issue_list_model import format_timestamp, preview_text
+from beeline_issue_tracker.ui_v2.risk_widgets import create_risk_reason_row, parse_risk_reasons
 from beeline_issue_tracker.ui_v2.theme import ThemeManager
-from beeline_issue_tracker.ui_v2.widgets import BrandHeader, HoneycombBackground, MetricPill, SearchBox
+from beeline_issue_tracker.ui_v2.widgets import BrandHeader, EmptyStatePanel, HoneycombBackground, MetricPill, SearchBox
 
 
 @dataclass(frozen=True)
@@ -90,13 +91,12 @@ class PredictiveMaintenancePage(HoneycombBackground):
     RISK_COLUMNS = (
         "Machine",
         "Area/Cell",
-        "Risk Level",
-        "Risk Score",
-        "Open Issues",
-        "Recent Issues",
-        "Predicted Problem",
+        "Risk",
+        "Score",
+        "Open",
+        "Recent",
+        "Problem",
         "Suggested Action",
-        "Confidence",
         "Action",
     )
     PATTERN_COLUMNS = ("Machine", "Pattern", "Count", "Last Seen", "Common Solution", "Risk Note")
@@ -130,16 +130,23 @@ class PredictiveMaintenancePage(HoneycombBackground):
 
         header = QHBoxLayout()
         back = QPushButton("Back to Dashboard")
+        back.setObjectName("quietButton")
         back.clicked.connect(self.back_requested.emit)
         header.addWidget(back)
-        header.addWidget(BrandHeader("BeeLine", "Predictive Maintenance", paths.logo_path(), theme_manager), 1)
+        header.addWidget(
+            BrandHeader("Predictive Maintenance", "Risk, trends, alerts, and recurring patterns", paths.logo_path(), theme_manager),
+            1,
+        )
         refresh = QPushButton("Refresh")
+        refresh.setObjectName("quietButton")
         refresh.clicked.connect(self.refresh)
         header.addWidget(refresh)
         copy_summary = QPushButton("Copy Summary")
+        copy_summary.setObjectName("secondaryButton")
         copy_summary.clicked.connect(self._copy_summary)
         header.addWidget(copy_summary)
         export_summary = QPushButton("Export Summary .txt")
+        export_summary.setObjectName("secondaryButton")
         export_summary.clicked.connect(self._export_summary)
         header.addWidget(export_summary)
         page.addLayout(header)
@@ -302,7 +309,7 @@ class PredictiveMaintenancePage(HoneycombBackground):
         self._render_risk_table()
 
     def _configure_tables(self) -> None:
-        risk_widths = (145, 120, 100, 82, 88, 96, 190, 230, 90, 110)
+        risk_widths = (160, 120, 88, 72, 72, 84, 220, 260, 170)
         for column, width in enumerate(risk_widths):
             self.risk_table.setColumnWidth(column, width)
         pattern_widths = (120, 190, 70, 145, 220, 320)
@@ -344,6 +351,7 @@ class PredictiveMaintenancePage(HoneycombBackground):
                         "BeeLine will improve predictions as issues are logged and resolved."
                     ),
                 )
+                self._adjust_table_height(self.risk_table, 0)
                 return
             self.risk_table.clearSpans()
             self.risk_table.setRowCount(len(self._visible_risks))
@@ -351,16 +359,16 @@ class PredictiveMaintenancePage(HoneycombBackground):
                 location = " / ".join(part for part in (risk.area, risk.cell) if part)
                 self.risk_table.setItem(row, 0, self._item(f"{risk.machine_number} | {risk.machine_name}"))
                 self.risk_table.setItem(row, 1, self._item(location or "-"))
-                self.risk_table.setItem(row, 2, self._item(risk.risk_level))
+                self.risk_table.setItem(row, 2, self._item(risk.risk_level, f"Confidence: {risk.confidence}"))
                 self.risk_table.setItem(row, 3, self._item(str(risk.risk_score)))
                 self.risk_table.setItem(row, 4, self._item(str(risk.open_issue_count)))
                 self.risk_table.setItem(row, 5, self._item(str(risk.recent_issue_count)))
                 self.risk_table.setItem(row, 6, self._item(preview_text(risk.predicted_problem, 72), risk.predicted_problem))
                 self.risk_table.setItem(row, 7, self._item(preview_text(risk.suggested_action, 86), risk.suggested_action))
-                self.risk_table.setItem(row, 8, self._item(risk.confidence))
-                self.risk_table.setCellWidget(row, 9, self._open_machine_button(risk.machine_number))
+                self.risk_table.setCellWidget(row, 8, self._open_machine_button(risk.machine_number))
                 self.risk_table.setRowHeight(row, 52)
             self.risk_table.clearSelection()
+            self._adjust_table_height(self.risk_table, len(self._visible_risks), row_height=52)
         finally:
             self.risk_table.blockSignals(False)
             self.risk_table.setUpdatesEnabled(True)
@@ -372,23 +380,19 @@ class PredictiveMaintenancePage(HoneycombBackground):
         title.setObjectName("sectionTitle")
         self.alerts_layout.addWidget(title)
         if not self._alerts:
-            empty = QLabel(
-                "Loading predictive alerts..."
-                if loading
-                else "Not enough issue history yet to generate strong predictions. "
-                "BeeLine will improve predictions as issues are logged and resolved."
+            empty = EmptyStatePanel(
+                "Loading predictive alerts" if loading else "Not enough issue history yet",
+                "" if loading else "BeeLine will improve predictions as issues are logged and resolved.",
             )
-            empty.setObjectName("mutedLabel")
-            empty.setWordWrap(True)
             self.alerts_layout.addWidget(empty)
             self.alerts_layout.addStretch(1)
             return
         for alert in self._alerts[:8]:
             row = QFrame()
-            row.setObjectName("formPanel")
+            row.setObjectName("alertCard")
             layout = QVBoxLayout(row)
-            layout.setContentsMargins(10, 8, 10, 8)
-            layout.setSpacing(5)
+            layout.setContentsMargins(12, 10, 12, 10)
+            layout.setSpacing(8)
             label = QLabel(f"{alert.risk_level} | Machine {alert.machine_number}")
             label.setObjectName("cardTitle")
             label.setWordWrap(True)
@@ -396,18 +400,23 @@ class PredictiveMaintenancePage(HoneycombBackground):
             message = QLabel(f"{alert.title}: {alert.message}")
             message.setWordWrap(True)
             layout.addWidget(message)
-            reasons = QLabel(" | ".join(alert.reasons) or "-")
-            reasons.setObjectName("mutedLabel")
-            reasons.setWordWrap(True)
-            layout.addWidget(reasons)
+            reasons_title = QLabel("Why this alert matters")
+            reasons_title.setObjectName("metricLabel")
+            layout.addWidget(reasons_title)
+            reasons = parse_risk_reasons(alert.reasons)
+            if reasons:
+                for reason in reasons[:4]:
+                    layout.addWidget(create_risk_reason_row(reason, object_name="alertReasonRow"))
+            else:
+                layout.addWidget(EmptyStatePanel("No specific alert reasons", "Review the machine risk details for context."))
             actions = QHBoxLayout()
             open_button = QPushButton("Open Machine")
-            open_button.setObjectName("tableActionButton")
+            open_button.setObjectName("secondaryButton")
             open_button.clicked.connect(lambda _checked=False, machine=alert.machine_number: self.machine_requested.emit(machine))
             actions.addWidget(open_button)
             if alert.id is not None:
                 dismiss = QPushButton("Dismiss")
-                dismiss.setObjectName("tableActionButton")
+                dismiss.setObjectName("quietButton")
                 dismiss.clicked.connect(lambda _checked=False, alert_id=alert.id: self._dismiss_alert(alert_id))
                 actions.addWidget(dismiss)
             actions.addStretch(1)
@@ -426,6 +435,7 @@ class PredictiveMaintenancePage(HoneycombBackground):
                 self.pattern_table.setRowCount(1)
                 self.pattern_table.setSpan(0, 0, 1, len(self.PATTERN_COLUMNS))
                 self.pattern_table.setItem(0, 0, self._item("No recurring patterns detected yet."))
+                self._adjust_table_height(self.pattern_table, 0)
                 return
             self.pattern_table.clearSpans()
             self.pattern_table.setRowCount(len(visible_patterns))
@@ -438,6 +448,7 @@ class PredictiveMaintenancePage(HoneycombBackground):
                 self.pattern_table.setItem(row, 4, self._item(preview_text(solution, 72), solution))
                 self.pattern_table.setItem(row, 5, self._item(pattern.risk_note))
                 self.pattern_table.setRowHeight(row, 48)
+            self._adjust_table_height(self.pattern_table, len(visible_patterns), row_height=48)
         finally:
             self.pattern_table.blockSignals(False)
             self.pattern_table.setUpdatesEnabled(True)
@@ -477,11 +488,24 @@ class PredictiveMaintenancePage(HoneycombBackground):
         host.setObjectName("transparentHost")
         layout = QHBoxLayout(host)
         layout.setContentsMargins(4, 4, 4, 4)
-        button = QPushButton("Open Machine")
+        button = QPushButton("Open")
         button.setObjectName("tableActionButton")
+        button.setToolTip("Open Machine")
         button.clicked.connect(lambda _checked=False, machine=machine_number: self.machine_requested.emit(machine))
         layout.addWidget(button)
         return host
+
+    @staticmethod
+    def _adjust_table_height(table: QTableWidget, visible_count: int, *, row_height: int = 52) -> None:
+        if visible_count <= 0:
+            table.setMinimumHeight(0)
+            table.setMaximumHeight(90)
+            return
+        header_height = table.horizontalHeader().height() or 38
+        visible_rows = min(visible_count, 6)
+        height = header_height + visible_rows * row_height + 14
+        table.setMinimumHeight(height)
+        table.setMaximumHeight(height if visible_count <= 3 else 16777215)
 
     @staticmethod
     def _item(text: str, tooltip: str | None = None) -> QTableWidgetItem:

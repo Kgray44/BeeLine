@@ -69,15 +69,19 @@ class LineTrendChart(QWidget):
         painter.setPen(QColor(tokens.text_primary))
         painter.drawText(12, 24, self.title)
 
-        plot = QRectF(36, 42, max(1, self.width() - 52), max(1, self.height() - 74))
+        plot = QRectF(42, 44, max(1, self.width() - 62), max(1, self.height() - 82))
         painter.setPen(QPen(QColor(tokens.border), 1))
         painter.drawRect(plot)
         if not self.values:
             painter.setPen(QColor(tokens.text_secondary))
-            painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, "No trend data")
+            painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, "Not enough trend data yet")
             return
 
         normalized = normalize_chart_values(self.values)
+        painter.setPen(QPen(QColor(tokens.border), 1))
+        for index in range(1, 4):
+            y = plot.top() + plot.height() * index / 4
+            painter.drawLine(int(plot.left()), int(y), int(plot.right()), int(y))
         if len(normalized) == 1:
             x_positions = [plot.left() + plot.width() / 2]
         else:
@@ -95,11 +99,19 @@ class LineTrendChart(QWidget):
         painter.setPen(QPen(QColor(tokens.accent), 3))
         painter.drawPath(path)
         painter.setBrush(QColor(tokens.accent))
-        for x, y in points:
+        show_values = len(points) <= 8
+        for index, (x, y) in enumerate(points):
             painter.drawEllipse(QRectF(x - 3, y - 3, 6, 6))
+            if show_values:
+                painter.setPen(QColor(tokens.text_primary))
+                painter.drawText(QRectF(x - 18, y - 22, 36, 16), Qt.AlignmentFlag.AlignCenter, str(self.values[index]))
+                painter.setBrush(QColor(tokens.accent))
 
         painter.setPen(QColor(tokens.text_secondary))
-        for label, x in zip(self.labels, x_positions):
+        label_indexes = set(_visible_label_indexes(len(self.labels)))
+        for index, (label, x) in enumerate(zip(self.labels, x_positions)):
+            if index not in label_indexes:
+                continue
             painter.drawText(QRectF(x - 34, plot.bottom() + 6, 68, 18), Qt.AlignmentFlag.AlignCenter, label)
 
 
@@ -129,20 +141,23 @@ class BarBreakdownChart(QWidget):
         items = list(self.values.items())[:6]
         if not items:
             painter.setPen(QColor(tokens.text_secondary))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No breakdown data")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No category breakdown yet")
             return
 
         maximum = max(value for _label, value in items) or 1
         top = 44
         row_height = max(24, (self.height() - top - 12) // max(1, len(items)))
+        label_width = min(160, max(112, self.width() // 3))
+        bar_left = label_width + 18
+        value_width = 42
         for index, (label, value) in enumerate(items):
             y = top + index * row_height
             painter.setPen(QColor(tokens.text_secondary))
-            painter.drawText(12, y + 17, label[:24])
-            bar_width = int((self.width() - 174) * (value / maximum))
+            painter.drawText(QRectF(12, y + 1, label_width, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label[:28])
+            bar_width = int(max(2, (self.width() - bar_left - value_width - 16) * (value / maximum)))
             painter.setBrush(QColor(tokens.accent))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(128, y + 4, max(2, bar_width), 16, 4, 4)
+            painter.drawRoundedRect(bar_left, y + 4, max(2, bar_width), 16, 4, 4)
             painter.setPen(QColor(tokens.text_primary))
             painter.drawText(self.width() - 42, y + 17, str(value))
 
@@ -167,7 +182,7 @@ class RiskScoreBar(QWidget):
         tokens = _tokens(self.theme_manager)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(0, 10, max(1, self.width()), 18)
+        rect = QRectF(0, 18, max(1, self.width()), 16)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(tokens.background_subtle))
         painter.drawRoundedRect(rect, 5, 5)
@@ -175,8 +190,17 @@ class RiskScoreBar(QWidget):
         painter.setBrush(QColor(risk_level_color(self.risk_level)))
         painter.drawRoundedRect(fill, 5, 5)
         painter.setPen(QColor(tokens.text_primary))
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, f"{self.risk_level} | {self.score}")
+        painter.drawText(QRectF(0, 0, self.width(), 16), Qt.AlignmentFlag.AlignCenter, f"{self.risk_level} | {self.score}")
 
 
 def _tokens(theme_manager: ThemeManager | None):
     return theme_manager.current_theme if theme_manager is not None else theme_from_name(DARK_THEME)
+
+
+def _visible_label_indexes(count: int) -> list[int]:
+    if count <= 8:
+        return list(range(count))
+    if count <= 12:
+        return list(range(0, count, 2)) + ([count - 1] if count % 2 == 0 else [])
+    middle = count // 2
+    return [0, middle, count - 1]
