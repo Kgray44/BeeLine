@@ -19,6 +19,24 @@ from scripts.initialize_runtime_files import create_templates
 
 
 class AppCliTest(unittest.TestCase):
+    def test_ui_version_defaults_to_v2(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            args = beeline_app.build_parser().parse_args([])
+
+        self.assertEqual("v2", args.ui_version)
+
+    def test_ui_version_can_come_from_environment(self) -> None:
+        with patch.dict(os.environ, {"BEELINE_UI_VERSION": "v2"}, clear=False):
+            args = beeline_app.build_parser().parse_args([])
+
+        self.assertEqual("v2", args.ui_version)
+
+    def test_ui_version_cli_accepts_current_ui(self) -> None:
+        with patch.dict(os.environ, {"BEELINE_UI_VERSION": "v1"}, clear=False):
+            args = beeline_app.build_parser().parse_args(["--ui-version", "v2"])
+
+        self.assertEqual("v2", args.ui_version)
+
     def test_check_does_not_force_archive_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = self._env(Path(tmp))

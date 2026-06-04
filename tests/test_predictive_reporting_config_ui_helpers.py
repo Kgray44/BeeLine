@@ -24,7 +24,7 @@ from beeline_issue_tracker.analytics.reporting import (
     build_predictive_summary_text,
 )
 from beeline_issue_tracker.config import load_runtime_config
-from beeline_issue_tracker.ui.charts import normalize_chart_values, risk_level_color
+from beeline_issue_tracker.ui_v2.charts import normalize_chart_values, risk_level_color
 
 
 class PredictiveReportingConfigUiHelpersTest(unittest.TestCase):

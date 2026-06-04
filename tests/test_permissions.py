@@ -19,6 +19,7 @@ from beeline_issue_tracker.permissions import (
     can_edit_issue,
     can_manage_machine_intelligence,
     can_manage_users,
+    can_open_predictive_maintenance,
     can_open_settings,
     can_resolve_issue,
     can_use_database_tools,
@@ -41,6 +42,7 @@ class PermissionsTest(unittest.TestCase):
                 self.assertFalse(can_delete_issue(role))
                 self.assertFalse(can_dismiss_predictive_alert(role))
                 self.assertFalse(can_manage_machine_intelligence(role))
+                self.assertFalse(can_open_predictive_maintenance(role))
                 self.assertFalse(can_open_settings(role))
                 self.assertFalse(can_manage_users(role))
                 self.assertFalse(can_use_database_tools(role))
@@ -50,14 +52,17 @@ class PermissionsTest(unittest.TestCase):
                 self.assertTrue(can_edit_issue(role))
                 self.assertTrue(can_resolve_issue(role))
                 self.assertTrue(can_close_issue(role))
-                self.assertTrue(can_dismiss_predictive_alert(role))
 
         self.assertFalse(can_archive_issue("technician"))
         self.assertTrue(can_archive_issue("admin"))
         self.assertFalse(can_delete_issue("technician"))
         self.assertTrue(can_delete_issue("admin"))
+        self.assertFalse(can_dismiss_predictive_alert("technician"))
+        self.assertTrue(can_dismiss_predictive_alert("admin"))
         self.assertFalse(can_manage_machine_intelligence("technician"))
         self.assertTrue(can_manage_machine_intelligence("admin"))
+        self.assertFalse(can_open_predictive_maintenance("technician"))
+        self.assertTrue(can_open_predictive_maintenance("admin"))
         self.assertFalse(can_open_settings("technician"))
         self.assertTrue(can_open_settings("admin"))
         self.assertFalse(can_manage_users("technician"))

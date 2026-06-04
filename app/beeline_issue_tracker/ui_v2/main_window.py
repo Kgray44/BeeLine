@@ -39,21 +39,24 @@ from beeline_issue_tracker.permissions import (
     can_dismiss_predictive_alert,
     can_open_predictive_maintenance,
     can_open_settings,
+    can_open_special,
     can_resolve_issue,
 )
-from beeline_issue_tracker.ui.dashboard import HiveDashboardPage
-from beeline_issue_tracker.ui.dialogs import LoginDialog, PinDialog, ResolveIssueDialog
-from beeline_issue_tracker.ui.issue_detail_page import IssueDetailPage
-from beeline_issue_tracker.ui.log_issue_page import LogIssuePage
-from beeline_issue_tracker.ui.machine_cell import MachineCellPage, MachineCellQuery, load_machine_cell_snapshot
-from beeline_issue_tracker.ui.machine_details_page import MachineDetailsPage, load_machine_details_snapshot
-from beeline_issue_tracker.ui.open_issues import OpenIssuesPage, load_open_issues_snapshot
-from beeline_issue_tracker.ui.predictive_maintenance_page import (
+from beeline_issue_tracker.ui_v2.dashboard import HiveDashboardPage
+from beeline_issue_tracker.ui_v2.dialogs import LoginDialog, PinDialog, ResolveIssueDialog
+from beeline_issue_tracker.ui_v2.issue_detail_page import IssueDetailPage
+from beeline_issue_tracker.ui_v2.log_issue_page import LogIssuePage
+from beeline_issue_tracker.ui_v2.machine_cell import MachineCellPage, MachineCellQuery, load_machine_cell_snapshot
+from beeline_issue_tracker.ui_v2.machine_details_page import MachineDetailsPage, load_machine_details_snapshot
+from beeline_issue_tracker.ui_v2.open_issues import OpenIssuesPage, load_open_issues_snapshot
+from beeline_issue_tracker.ui_v2.predictive_maintenance_page import (
     PredictiveMaintenancePage,
     load_predictive_page_snapshot,
 )
-from beeline_issue_tracker.ui.settings_page import SettingsPage
-from beeline_issue_tracker.ui.theme import ThemeManager
+from beeline_issue_tracker.ui_v2.settings_page import SettingsPage
+from beeline_issue_tracker.ui_v2.special_page import SpecialPage
+from beeline_issue_tracker.ui_v2.theme import ThemeManager
+from beeline_issue_tracker.ui_special_effects import SpecialScreenOverlay
 
 
 logger = logging.getLogger(__name__)
@@ -431,6 +434,7 @@ class MainWindow(QMainWindow):
         self._pending_predictive_focus = ""
         self._closing = False
         self._current_detail: tuple[str, int] | None = None
+        self._special_unlocked = False
         self.current_role = "viewer"
         self.thread_pool = QThreadPool.globalInstance()
         self.thread_pool.setMaxThreadCount(2)
@@ -463,6 +467,8 @@ class MainWindow(QMainWindow):
         )
         self.predictive_page = PredictiveMaintenancePage(self.predictive_service, theme_manager, paths)
         self.settings_page = SettingsPage(paths, self.runtime_config, theme_manager)
+        self.special_page = SpecialPage(paths, self.runtime_config, theme_manager)
+        self.dashboard.set_special_effects_settings(self.special_page.settings())
         self.stack.addWidget(self.dashboard)
         self.stack.addWidget(self.machine_cell)
         self.stack.addWidget(self.machine_details_page)
@@ -471,7 +477,10 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.log_issue_page)
         self.stack.addWidget(self.predictive_page)
         self.stack.addWidget(self.settings_page)
+        self.stack.addWidget(self.special_page)
         self.setCentralWidget(self.stack)
+        self.special_overlay = SpecialScreenOverlay(self.stack)
+        self.special_overlay.set_settings(self.special_page.settings())
 
         self.dashboard.machine_selected.connect(self.show_machine)
         self.dashboard.issue_detail_requested.connect(
@@ -479,6 +488,7 @@ class MainWindow(QMainWindow):
         )
         self.dashboard.open_issues_requested.connect(self.show_open_issues)
         self.dashboard.predictive_requested.connect(self.show_predictive_maintenance)
+        self.dashboard.falling_drip_requested.connect(self._spawn_special_falling_drip)
         self.machine_cell.back_requested.connect(self.return_from_machine)
         self.machine_cell.log_issue_requested.connect(self.show_log_issue)
         self.machine_cell.resolve_issue_requested.connect(self.open_resolve_issue)
@@ -516,17 +526,29 @@ class MainWindow(QMainWindow):
         self.settings_page.back_requested.connect(self.show_dashboard)
         self.settings_page.logout_requested.connect(self.logout)
         self.settings_page.archive_retry_requested.connect(self.retry_failed_archive_writes)
+        self.special_page.back_requested.connect(self.show_dashboard)
+        self.special_page.settings_changed.connect(self._apply_special_settings)
+        self.dashboard.special_state_changed.connect(self.special_page.set_state)
+        self.dashboard.special_state_changed.connect(self.special_overlay.set_state)
 
         self.role_label = QLabel()
         self.role_label.setObjectName("roleBadge")
+        self.predictive_button = QPushButton("Predictive Maintenance")
+        self.predictive_button.setObjectName("loginButton")
+        self.predictive_button.clicked.connect(self.show_predictive_maintenance)
         self.settings_button = QPushButton("Settings")
         self.settings_button.setObjectName("loginButton")
         self.settings_button.clicked.connect(self.show_settings)
+        self.special_button = QPushButton("Special")
+        self.special_button.setObjectName("loginButton")
+        self.special_button.clicked.connect(self.show_special)
         self.login_button = QPushButton("Login")
         self.login_button.setObjectName("loginButton")
         self.login_button.clicked.connect(self.open_login_dialog)
         self.statusBar().addPermanentWidget(self.role_label)
+        self.statusBar().addPermanentWidget(self.predictive_button)
         self.statusBar().addPermanentWidget(self.settings_button)
+        self.statusBar().addPermanentWidget(self.special_button)
         self.statusBar().addPermanentWidget(self.login_button)
 
         self._refresh_dashboard("startup")
@@ -552,6 +574,22 @@ class MainWindow(QMainWindow):
             queued_refresh=refresh and defer_refresh,
             elapsed_ms=elapsed_ms(started_at),
         )
+
+    def show_special(self) -> None:
+        if not can_open_special(self.current_role):
+            QMessageBox.warning(self, "Admin required", "Special is available after Admin login.")
+            return
+        if not self._special_unlocked:
+            dialog = PinDialog("Enter Special PIN", self)
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                return
+            if not self.runtime_config.verify_special_pin(dialog.value()):
+                QMessageBox.warning(self, "PIN rejected", "That PIN is not authorized for Special.")
+                return
+            self._special_unlocked = True
+        self._current_detail = None
+        self.special_page.set_state(self.dashboard.special_state)
+        self.stack.set_current_widget_animated(self.special_page)
 
     def show_machine(self, machine_number: str, *, return_context: str = "dashboard") -> None:
         started_at = perf_now()
@@ -825,7 +863,7 @@ class MainWindow(QMainWindow):
 
     def dismiss_predictive_alert(self, alert_id: int) -> None:
         if not can_dismiss_predictive_alert(self.current_role):
-            QMessageBox.warning(self, "Login required", "Dismiss alert requires technician or admin PIN.")
+            QMessageBox.warning(self, "Admin required", "Dismiss alert requires Admin login.")
             return
         self.predictive_service.dismiss_alert(alert_id)
         self.show_predictive_maintenance()
@@ -839,6 +877,8 @@ class MainWindow(QMainWindow):
     def _handle_transition_finished(self, widget) -> None:
         if self._closing:
             return
+        if widget != self.special_page:
+            self._special_unlocked = False
         if widget == self.dashboard and self._dashboard_refresh_deferred:
             QTimer.singleShot(0, self._run_deferred_dashboard_refresh)
 
@@ -1033,6 +1073,7 @@ class MainWindow(QMainWindow):
 
     def logout(self) -> None:
         self.current_role = "viewer"
+        self._special_unlocked = False
         self._apply_role_ui()
         self.show_dashboard()
         self.statusBar().showMessage("Logged out. Viewer access active.", 4000)
@@ -1048,10 +1089,29 @@ class MainWindow(QMainWindow):
     def _apply_role_ui(self) -> None:
         self.role_label.setText(f"Role: {self._role_label_text()}")
         self.login_button.setText("Logout" if self.current_role != "viewer" else "Login")
+        self.predictive_button.setVisible(can_open_predictive_maintenance(self.current_role))
         self.settings_button.setVisible(can_open_settings(self.current_role))
+        self.special_button.setVisible(can_open_special(self.current_role))
         self.dashboard.set_can_open_predictive_maintenance(can_open_predictive_maintenance(self.current_role))
         self.machine_cell.set_can_report(can_create_issue(self.current_role))
         self.machine_details_page.set_can_report(can_create_issue(self.current_role))
+
+    def _apply_special_settings(self, settings) -> None:
+        self.dashboard.set_special_effects_settings(settings)
+        self.special_page.set_state(self.dashboard.special_state)
+        self.special_overlay.set_settings(settings)
+        self.special_overlay.set_state(self.dashboard.special_state)
+
+    def _spawn_special_falling_drip(self, machine_number: str, status: str, dashboard_point, seed: int) -> None:
+        overlay_point = self.dashboard.mapTo(self.special_overlay, dashboard_point)
+        self.special_overlay.spawn_falling_drip(
+            machine_number,
+            status,
+            overlay_point,
+            self.dashboard.special_state,
+            self.special_page.settings(),
+            seed,
+        )
 
     def _role_label_text(self) -> str:
         return {
@@ -1077,6 +1137,8 @@ class MainWindow(QMainWindow):
         self._issue_detail_request_id += 1
         self.dashboard._resize_timer.stop()
         self.dashboard._search_timer.stop()
+        self.dashboard._special_timer.stop()
+        self.special_overlay.stop()
         self.open_issues_page._search_timer.stop()
         self.predictive_page._render_timer.stop()
         self.machine_load_pool.waitForDone(3000)

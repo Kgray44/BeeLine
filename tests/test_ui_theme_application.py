@@ -21,8 +21,8 @@ from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
 from beeline_issue_tracker.domain import NON_CRITICAL
-from beeline_issue_tracker.ui.main_window import MainWindow
-from beeline_issue_tracker.ui.theme import DARK_THEME, LIGHT_THEME, ThemeManager
+from beeline_issue_tracker.ui_v2.main_window import MainWindow
+from beeline_issue_tracker.ui_v2.theme import DARK_THEME, LIGHT_THEME, ThemeManager
 
 
 DEMO_MACHINES = (
@@ -122,7 +122,7 @@ class UiThemeApplicationTest(unittest.TestCase):
                 window.show_dashboard()
                 window.show_open_issues()
                 window.show_machine(machine_number)
-                window.show_machine_details(machine_number, "predictive")
+                window.show_machine_details(machine_number, "trends")
                 window.show_active_issue_detail(active_issue.id, return_context="machine")
                 window.show_resolved_issue_detail(resolved_issue.id, return_context="machine")
                 window.show_log_issue(machine_number)

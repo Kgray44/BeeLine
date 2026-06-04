@@ -32,14 +32,22 @@ def can_delete_issue(role: str | None) -> bool:
 
 
 def can_dismiss_predictive_alert(role: str | None) -> bool:
-    return can_resolve_issue(role)
+    return role == ADMIN_ROLE
 
 
 def can_manage_machine_intelligence(role: str | None) -> bool:
     return role == ADMIN_ROLE
 
 
+def can_open_predictive_maintenance(role: str | None) -> bool:
+    return role == ADMIN_ROLE
+
+
 def can_open_settings(role: str | None) -> bool:
+    return role == ADMIN_ROLE
+
+
+def can_open_special(role: str | None) -> bool:
     return role == ADMIN_ROLE
 
 

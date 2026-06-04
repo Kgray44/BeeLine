@@ -10,6 +10,14 @@ from beeline_issue_tracker.security import RoleConfig, verify_pin
 
 
 APP_NAME = "BeeLine Issue Tracker"
+DEFAULT_ADMIN_PIN_HASH = (
+    "pbkdf2_sha256$180000$beeline-admin-pin-v1$"
+    "1037b58ba94f0bd31f21ea63c3e13e5d08a1844861a2807473dc324987b4a049"
+)
+DEFAULT_SPECIAL_PIN_HASH = (
+    "pbkdf2_sha256$180000$beeline-special-pin-v1$"
+    "34cee25eabcdd85cfd61da139c5dd71976fddea2ac96974bc00d4f829b83dfb1"
+)
 
 
 def project_root() -> Path:
@@ -78,12 +86,32 @@ class ArchiveCacheConfig:
 
 
 @dataclass(frozen=True)
+class SpecialEffectsConfig:
+    enabled: bool = True
+    threshold: int = 6
+    intensity_step: int = 1
+    force_test: bool = False
+    test_intensity: int = 3
+    enable_static: bool = True
+    enable_glitch: bool = True
+    enable_droop_drip: bool = True
+    enable_smear: bool = True
+    enable_card_impulses: bool = True
+    enable_falling_drips: bool = True
+    drip_intensity: int = 3
+    glitch_impulse_strength: int = 3
+    reduced_motion: bool = False
+    special_pin_hash: str = DEFAULT_SPECIAL_PIN_HASH
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     machines: tuple[MachineConfig, ...]
     roles: dict[str, RoleConfig]
     analytics: AnalyticsConfig = AnalyticsConfig()
     ui: UiConfig = UiConfig()
     archive_cache: ArchiveCacheConfig = ArchiveCacheConfig()
+    special_effects: SpecialEffectsConfig = SpecialEffectsConfig()
 
     def machine_rows(self) -> tuple[tuple[str, str, str, str, str, int, str, str, str, str, str, str], ...]:
         return tuple(machine.as_database_row() for machine in self.machines)
@@ -112,6 +140,9 @@ class RuntimeConfig:
     def is_role_enabled(self, role_name: str) -> bool:
         role = self.roles.get(role_name)
         return bool(role and role.enabled)
+
+    def verify_special_pin(self, pin: str) -> bool:
+        return verify_pin(pin, self.special_effects.special_pin_hash)
 
 
 @dataclass(frozen=True)
@@ -246,6 +277,7 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
         analytics=_load_analytics(raw.get("analytics", {})),
         ui=_load_ui(raw.get("ui", {})),
         archive_cache=_load_archive_cache(raw.get("archive_cache", {})),
+        special_effects=_load_special_effects(raw.get("special_effects", {})),
     )
 
 
@@ -260,10 +292,12 @@ def _load_roles(raw_roles: object) -> dict[str, RoleConfig]:
             raw_role = raw_roles.get("operator", {})
         if not isinstance(raw_role, dict):
             raw_role = {}
+        default_enabled = role_name == "admin"
+        default_pin_hash = DEFAULT_ADMIN_PIN_HASH if role_name == "admin" else ""
         roles[role_name] = RoleConfig(
             name=role_name,
-            enabled=bool(raw_role.get("enabled", False)),
-            pin_hash=str(raw_role.get("pin_hash", "") or "").strip(),
+            enabled=_bool_setting(raw_role, "enabled", default_enabled),
+            pin_hash=str(raw_role.get("pin_hash", default_pin_hash) or default_pin_hash).strip(),
         )
     return roles
 
@@ -367,6 +401,48 @@ def _load_archive_cache(raw_archive_cache: object) -> ArchiveCacheConfig:
             defaults.keep_per_machine_minimum,
             minimum=0,
         ),
+    )
+
+
+def _load_special_effects(raw_special: object) -> SpecialEffectsConfig:
+    defaults = SpecialEffectsConfig()
+    if not isinstance(raw_special, dict):
+        raw_special = {}
+
+    special_pin_hash = str(raw_special.get("special_pin_hash", defaults.special_pin_hash) or defaults.special_pin_hash)
+    if not special_pin_hash.startswith("pbkdf2_sha256$"):
+        special_pin_hash = defaults.special_pin_hash
+
+    return SpecialEffectsConfig(
+        enabled=_bool_setting(raw_special, "enabled", defaults.enabled),
+        threshold=_int_setting(raw_special, "threshold", defaults.threshold, minimum=0, maximum=100),
+        intensity_step=_int_setting(raw_special, "intensity_step", defaults.intensity_step, minimum=1, maximum=20),
+        force_test=_bool_setting(raw_special, "force_test", defaults.force_test),
+        test_intensity=_int_setting(raw_special, "test_intensity", defaults.test_intensity, minimum=1, maximum=5),
+        enable_static=_bool_setting(raw_special, "enable_static", defaults.enable_static),
+        enable_glitch=_bool_setting(raw_special, "enable_glitch", defaults.enable_glitch),
+        enable_droop_drip=_bool_setting(raw_special, "enable_droop_drip", defaults.enable_droop_drip),
+        enable_smear=_bool_setting(raw_special, "enable_smear", defaults.enable_smear),
+        enable_card_impulses=_bool_setting(
+            raw_special,
+            "enable_card_impulses",
+            defaults.enable_card_impulses,
+        ),
+        enable_falling_drips=_bool_setting(
+            raw_special,
+            "enable_falling_drips",
+            defaults.enable_falling_drips,
+        ),
+        drip_intensity=_int_setting(raw_special, "drip_intensity", defaults.drip_intensity, minimum=1, maximum=5),
+        glitch_impulse_strength=_int_setting(
+            raw_special,
+            "glitch_impulse_strength",
+            defaults.glitch_impulse_strength,
+            minimum=1,
+            maximum=5,
+        ),
+        reduced_motion=_bool_setting(raw_special, "reduced_motion", defaults.reduced_motion),
+        special_pin_hash=special_pin_hash.strip(),
     )
 
 

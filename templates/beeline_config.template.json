@@ -15,8 +15,8 @@
       "pin_hash": ""
     },
     "admin": {
-      "enabled": false,
-      "pin_hash": ""
+      "enabled": true,
+      "pin_hash": "pbkdf2_sha256$180000$beeline-admin-pin-v1$1037b58ba94f0bd31f21ea63c3e13e5d08a1844861a2807473dc324987b4a049"
     }
   },
   "ui": {
@@ -45,6 +45,23 @@
     "keep_days": 180,
     "keep_minimum": 1000,
     "keep_per_machine_minimum": 25
+  },
+  "special_effects": {
+    "enabled": true,
+    "threshold": 6,
+    "intensity_step": 1,
+    "force_test": false,
+    "test_intensity": 3,
+    "enable_static": true,
+    "enable_glitch": true,
+    "enable_droop_drip": true,
+    "enable_smear": true,
+    "enable_card_impulses": true,
+    "enable_falling_drips": true,
+    "drip_intensity": 3,
+    "glitch_impulse_strength": 3,
+    "reduced_motion": false,
+    "special_pin_hash": "pbkdf2_sha256$180000$beeline-special-pin-v1$34cee25eabcdd85cfd61da139c5dd71976fddea2ac96974bc00d4f829b83dfb1"
   },
   "machines": []
 }

@@ -11,7 +11,7 @@ for path in (APP_DIR, PROJECT_ROOT):
         sys.path.insert(0, str(path))
 
 from beeline_issue_tracker.domain import Issue, ResolvedIssue
-from beeline_issue_tracker.ui.issue_list_model import (
+from beeline_issue_tracker.ui_v2.issue_list_model import (
     DATE_ASC,
     DATE_DESC,
     ISSUE_ID_ASC,

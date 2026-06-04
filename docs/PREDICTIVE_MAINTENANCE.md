@@ -21,7 +21,7 @@ Generated summaries belong in the ignored local `exports/` folder.
 
 ## What It Does
 
-The Predictive Maintenance page shows:
+The Predictive Maintenance page is visible after Admin login and shows:
 
 - machine risk ranking
 - predictive alerts
@@ -164,4 +164,3 @@ It should support maintenance decisions, not replace human judgment.
 Fix suggestions are based only on past BeeLine records and must be verified before applying.
 
 This release does not use cloud AI or embeddings. Any future AI integration must be disabled by default, clearly marked future-only, and reviewed against BeeLine NDA rules.
-

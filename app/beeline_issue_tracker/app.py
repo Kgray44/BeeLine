@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from PySide6.QtWidgets import QApplication
@@ -12,15 +13,22 @@ from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
 from beeline_issue_tracker.domain import display_issue_id
 from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
-from beeline_issue_tracker.ui.main_window import MainWindow
-from beeline_issue_tracker.ui.theme import ThemeManager
 
 
 logger = logging.getLogger(__name__)
+UI_VERSIONS = ("v2",)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=APP_NAME)
+    parser.add_argument(
+        "--ui-version",
+        choices=UI_VERSIONS,
+        default=os.environ.get("BEELINE_UI_VERSION", "v2"),
+        help=(
+            "Choose which BeeLine UI shell to launch. v2 is the current BeeLine UI."
+        ),
+    )
     parser.add_argument(
         "--check",
         action="store_true",
@@ -37,6 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rebuild the readable grouped Excel archive view, then print archive status.",
     )
     return parser
+
+
+def load_ui_classes(ui_version: str):
+    if ui_version == "v2":
+        from beeline_issue_tracker.ui_v2.main_window import MainWindow
+        from beeline_issue_tracker.ui_v2.theme import ThemeManager
+        return MainWindow, ThemeManager
+    raise ValueError(f"Unknown BeeLine UI version: {ui_version}")
 
 
 def print_archive_status(paths: AppPaths, repository: IssueRepository) -> None:
@@ -111,7 +127,13 @@ def print_startup_archive_health(paths: AppPaths, repository: IssueRepository) -
 def main(argv: list[str] | None = None) -> int:
     started_at = perf_now()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.ui_version not in UI_VERSIONS:
+        parser.error(
+            "argument --ui-version: invalid choice: "
+            f"{args.ui_version!r} (choose from 'v2')"
+        )
     paths = AppPaths.from_environment()
     initialize_runtime_files(paths)
     runtime_config = load_runtime_config(paths.runtime_config_path)
@@ -142,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
     app.setOrganizationName("BeeLine")
     app.setApplicationName(APP_NAME)
+    MainWindow, ThemeManager = load_ui_classes(args.ui_version)
     theme_manager = ThemeManager()
     app.setStyleSheet(theme_manager.build_stylesheet())
     theme_manager.theme_changed.connect(lambda _theme: app.setStyleSheet(theme_manager.build_stylesheet()))

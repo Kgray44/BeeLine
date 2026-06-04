@@ -23,15 +23,17 @@ class SecurityTest(unittest.TestCase):
         self.assertFalse(verify_pin("9999", stored))
         self.assertFalse(verify_pin("1234", "not-a-valid-hash"))
 
-    def test_default_config_preserves_no_security_behavior(self) -> None:
+    def test_default_config_enables_local_admin_pin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "beeline_config.json"
             config_path.write_text(json.dumps({"version": 1, "machines": []}), encoding="utf-8")
 
             config = load_runtime_config(config_path)
 
-            self.assertFalse(config.resolve_requires_pin())
-            self.assertFalse(config.verify_pin_for_roles("1234", ("technician", "admin")))
+            self.assertTrue(config.resolve_requires_pin())
+            self.assertTrue(config.role_requires_pin("admin"))
+            self.assertTrue(config.verify_pin_for_roles("6767", ("admin",)))
+            self.assertFalse(config.verify_pin_for_roles("1234", ("admin",)))
 
     def test_role_config_requires_and_verifies_technician_pin(self) -> None:
         stored = hash_pin("2468", "role-test-salt", iterations=10_000)

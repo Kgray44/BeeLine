@@ -21,9 +21,10 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
-from beeline_issue_tracker.ui.machine_details_page import MachineDetailsPage, parse_risk_reasons
-from beeline_issue_tracker.ui.main_window import FadeStackedWidget, MainWindow
-from beeline_issue_tracker.ui.theme import ThemeManager
+from beeline_issue_tracker.ui_v2.machine_details_page import MachineDetailsPage
+from beeline_issue_tracker.ui_v2.main_window import FadeStackedWidget, MainWindow
+from beeline_issue_tracker.ui_v2.risk_widgets import parse_risk_reasons
+from beeline_issue_tracker.ui_v2.theme import ThemeManager
 
 
 DEMO_MACHINES = (
@@ -49,6 +50,13 @@ class MachineInfoPageTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def _close_window(self, window: MainWindow) -> None:
+        window.stack._clear_animation()
+        window.close()
+        self.app.processEvents()
+        window.deleteLater()
+        self.app.processEvents()
 
     def test_risk_reason_parser_splits_scores_and_sorts_by_impact(self) -> None:
         reasons = parse_risk_reasons(
@@ -87,7 +95,7 @@ class MachineInfoPageTest(unittest.TestCase):
         self.assertIs(window.stack.currentWidget(), window.machine_details_page)
         self.assertEqual("Machine Info", window.machine_details_page.brand_header.title_label.text())
         self.assertIn(f"Machine {self.machine_number}", window.machine_details_page.brand_header.subtitle_label.text())
-        window.close()
+        self._close_window(window)
 
     def test_machine_click_switches_before_repository_load(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
@@ -96,7 +104,7 @@ class MachineInfoPageTest(unittest.TestCase):
 
         with (
             patch.object(self.repository, "get_machine_summary", side_effect=AssertionError("machine loaded before navigation")),
-            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+            patch("beeline_issue_tracker.ui_v2.main_window.QTimer.singleShot") as single_shot,
         ):
             window.show_machine(self.machine_number)
 
@@ -104,8 +112,7 @@ class MachineInfoPageTest(unittest.TestCase):
         self.assertEqual(f"Machine {self.machine_number}", window.machine_cell.machine_title.text())
         self.assertEqual("Loading machine details...", window.machine_cell.machine_subtitle.text())
         single_shot.assert_called_once()
-        window.stack._clear_animation()
-        window.close()
+        self._close_window(window)
 
     def test_cancel_log_issue_does_not_refresh_or_reload(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
@@ -124,8 +131,7 @@ class MachineInfoPageTest(unittest.TestCase):
         machine_refresh.assert_not_called()
         open_refresh.assert_not_called()
         self.assertIs(window.stack.currentWidget(), window.machine_cell)
-        window.stack._clear_animation()
-        window.close()
+        self._close_window(window)
 
     def test_dashboard_refresh_is_deferred_until_after_navigation(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
@@ -137,54 +143,52 @@ class MachineInfoPageTest(unittest.TestCase):
         dashboard_refresh.assert_not_called()
         self.assertTrue(window._dashboard_refresh_deferred)
         self.assertIs(window.stack.currentWidget(), window.dashboard)
-        window.stack._clear_animation()
-        window.close()
+        self._close_window(window)
 
     def test_open_issues_navigation_switches_before_repository_load(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
         with (
             patch.object(self.repository, "list_machines_with_status", side_effect=AssertionError("open issues loaded before navigation")),
-            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+            patch("beeline_issue_tracker.ui_v2.main_window.QTimer.singleShot") as single_shot,
         ):
             window.show_open_issues()
 
         self.assertIs(window.stack.currentWidget(), window.open_issues_page)
-        self.assertEqual("Loading open issues...", window.open_issues_page.empty_label.text())
+        self.assertEqual("Loading open issues", window.open_issues_page.empty_panel.title_label.text())
         single_shot.assert_called_once()
-        window.stack._clear_animation()
-        window.close()
+        self._close_window(window)
 
     def test_predictive_navigation_switches_before_analytics_load(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
+        window.current_role = "admin"
+        window._apply_role_ui()
         with (
             patch.object(
                 window.predictive_service,
                 "get_all_machine_risks",
                 side_effect=AssertionError("predictive loaded before navigation"),
             ),
-            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+            patch("beeline_issue_tracker.ui_v2.main_window.QTimer.singleShot") as single_shot,
         ):
             window.show_predictive_maintenance()
 
         self.assertIs(window.stack.currentWidget(), window.predictive_page)
         self.assertEqual("-", window.predictive_page.open_total_pill.value_widget.text())
         single_shot.assert_called_once()
-        window.stack._clear_animation()
-        window.close()
+        self._close_window(window)
 
     def test_machine_details_navigation_switches_before_repository_load(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
         with (
             patch.object(self.repository, "get_machine_summary", side_effect=AssertionError("details loaded before navigation")),
-            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+            patch("beeline_issue_tracker.ui_v2.main_window.QTimer.singleShot") as single_shot,
         ):
             window.show_machine_details(self.machine_number, "history")
 
         self.assertIs(window.stack.currentWidget(), window.machine_details_page)
         self.assertIn(f"Machine {self.machine_number}", window.machine_details_page.brand_header.subtitle_label.text())
         self.assertGreaterEqual(single_shot.call_count, 1)
-        window.stack._clear_animation()
-        window.close()
+        self._close_window(window)
 
     def test_issue_detail_navigation_switches_before_repository_load(self) -> None:
         issue = self.repository.log_issue(
@@ -202,15 +206,14 @@ class MachineInfoPageTest(unittest.TestCase):
                 "get_issue_with_machine_context",
                 side_effect=AssertionError("issue detail loaded before navigation"),
             ),
-            patch("beeline_issue_tracker.ui.main_window.QTimer.singleShot") as single_shot,
+            patch("beeline_issue_tracker.ui_v2.main_window.QTimer.singleShot") as single_shot,
         ):
             window.show_active_issue_detail(issue.id)
 
         self.assertIs(window.stack.currentWidget(), window.issue_detail_page)
         self.assertIn(str(issue.id), window.issue_detail_page.brand_header.subtitle_label.text())
         single_shot.assert_called_once()
-        window.stack._clear_animation()
-        window.close()
+        self._close_window(window)
 
     def test_dashboard_refresh_reuses_existing_card_layout(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
@@ -221,7 +224,7 @@ class MachineInfoPageTest(unittest.TestCase):
 
         detach.assert_not_called()
         self.assertEqual(1, len(window.dashboard._machine_cards))
-        window.close()
+        self._close_window(window)
 
     def test_quick_search_does_not_touch_excel(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
@@ -232,7 +235,7 @@ class MachineInfoPageTest(unittest.TestCase):
             window.dashboard._render_dashboard()
 
         load_workbook.assert_not_called()
-        window.close()
+        self._close_window(window)
 
     def test_machine_cell_refresh_uses_limited_direct_queries(self) -> None:
         window = MainWindow(self.repository, self.paths, self.theme_manager)
@@ -253,16 +256,19 @@ class MachineInfoPageTest(unittest.TestCase):
             self.assertEqual(10, call.kwargs.get("limit"))
         for call in resolved.call_args_list:
             self.assertEqual(10, call.kwargs.get("limit"))
-        window.close()
+        self._close_window(window)
 
     def test_machine_info_handles_missing_predictive_service(self) -> None:
         page = MachineDetailsPage(self.repository, self.theme_manager, self.paths, predictive_service=None)
-        page.load_machine(self.machine_number, "predictive")
+        page.load_machine(self.machine_number, "trends")
         self.app.processEvents()
 
         label_texts = [label.text() for label in page.findChildren(QLabel)]
+        button_texts = [button.text() for button in page.findChildren(QPushButton)]
+        self.assertNotIn("Predictive", button_texts)
+        self.assertNotIn("Predictive Maintenance", label_texts)
         self.assertIn(
-            "No predictive data available yet. Machine history will appear here once issues are logged or resolved.",
+            "Not enough trend data yet. BeeLine will draw this graph as issues are logged.",
             label_texts,
         )
 
@@ -281,26 +287,30 @@ class MachineInfoPageTest(unittest.TestCase):
             self.assertIsNotNone(call.kwargs.get("limit"))
 
     def test_shared_page_transition_is_stronger_and_immediate(self) -> None:
-        stack = FadeStackedWidget()
-        first = QLabel("Home")
-        second = QLabel("Machine")
-        stack.addWidget(first)
-        stack.addWidget(second)
-        stack.resize(480, 320)
-        stack.show()
-        self.app.processEvents()
+        with patch.dict(os.environ, {FadeStackedWidget.REDUCED_MOTION_ENV: "0"}):
+            stack = FadeStackedWidget()
+            first = QLabel("Home")
+            second = QLabel("Machine")
+            stack.addWidget(first)
+            stack.addWidget(second)
+            stack.resize(480, 320)
+            stack.show()
+            self.app.processEvents()
 
-        stack.set_current_widget_animated(second)
-        self.app.processEvents()
+            stack.set_current_widget_animated(second)
+            self.app.processEvents()
 
-        self.assertIs(stack.currentWidget(), second)
-        self.assertEqual(280, stack.ENTRY_DURATION_MS)
-        self.assertEqual(180, stack.EXIT_DURATION_MS)
-        self.assertEqual(18, stack.ENTRY_OFFSET_PX)
-        self.assertIsNotNone(stack._animation)
-        self.assertIsNotNone(stack._entry_effect)
-        stack._clear_animation()
-        stack.close()
+            self.assertIs(stack.currentWidget(), second)
+            self.assertEqual(280, stack.ENTRY_DURATION_MS)
+            self.assertEqual(180, stack.EXIT_DURATION_MS)
+            self.assertEqual(18, stack.ENTRY_OFFSET_PX)
+            self.assertIsNotNone(stack._animation)
+            self.assertIsNotNone(stack._entry_effect)
+            stack._clear_animation()
+            stack.close()
+            self.app.processEvents()
+            stack.deleteLater()
+            self.app.processEvents()
 
     def test_reduced_motion_disables_page_transition(self) -> None:
         with patch.dict(os.environ, {FadeStackedWidget.REDUCED_MOTION_ENV: "1"}):

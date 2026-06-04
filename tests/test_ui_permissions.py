@@ -22,8 +22,8 @@ from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.database import initialize_database
 from beeline_issue_tracker.data.repository import IssueRepository
 from beeline_issue_tracker.domain import NON_CRITICAL
-from beeline_issue_tracker.ui.main_window import MainWindow
-from beeline_issue_tracker.ui.theme import ThemeManager
+from beeline_issue_tracker.ui_v2.main_window import MainWindow
+from beeline_issue_tracker.ui_v2.theme import ThemeManager
 
 
 DEMO_MACHINES = (
@@ -102,23 +102,53 @@ class UiPermissionsTest(unittest.TestCase):
             with self.subTest(role=role):
                 self.window.current_role = role
                 self.window._apply_role_ui()
-                with patch("beeline_issue_tracker.ui.main_window.QMessageBox.warning") as warning:
+                with patch("beeline_issue_tracker.ui_v2.main_window.QMessageBox.warning") as warning:
                     self.window.open_resolve_issue(issue.id)
                 warning.assert_called()
                 self.assertIsNotNone(self.repository.get_active_issue(issue.id))
 
-                with patch("beeline_issue_tracker.ui.main_window.QMessageBox.warning") as warning:
+                with patch("beeline_issue_tracker.ui_v2.main_window.QMessageBox.warning") as warning:
                     self.window.show_settings()
                 warning.assert_called()
                 self.assertIsNot(self.window.stack.currentWidget(), self.window.settings_page)
 
                 with (
-                    patch("beeline_issue_tracker.ui.main_window.QMessageBox.warning") as warning,
+                    patch("beeline_issue_tracker.ui_v2.main_window.QMessageBox.warning") as warning,
                     patch.object(self.window.predictive_service, "dismiss_alert") as dismiss_alert,
                 ):
                     self.window.dismiss_predictive_alert(123)
                 warning.assert_called()
                 dismiss_alert.assert_not_called()
+
+    def test_predictive_navigation_is_admin_only(self) -> None:
+        self.window.current_role = "viewer"
+        self.window._apply_role_ui()
+        self.assertFalse(self.window.predictive_button.isVisible())
+        self.assertFalse(self.window.dashboard.predictive_button.isVisible())
+        with patch("beeline_issue_tracker.ui_v2.main_window.QMessageBox.warning") as warning:
+            self.window.show_predictive_maintenance()
+        warning.assert_called()
+        self.assertIsNot(self.window.stack.currentWidget(), self.window.predictive_page)
+
+        self.window.current_role = "admin"
+        self.window._apply_role_ui()
+        self.assertTrue(self.window.predictive_button.isVisible())
+        self.assertTrue(self.window.dashboard.predictive_button.isVisible())
+        with patch("beeline_issue_tracker.ui_v2.main_window.QTimer.singleShot") as single_shot:
+            self.window.dashboard.predictive_button.click()
+        self.assertIs(self.window.stack.currentWidget(), self.window.predictive_page)
+        single_shot.assert_called_once()
+
+    def test_predictive_refresh_remains_enabled_for_admin_page(self) -> None:
+        self.window.current_role = "admin"
+        self.window._apply_role_ui()
+        with patch("beeline_issue_tracker.ui_v2.main_window.QTimer.singleShot"):
+            self.window.show_predictive_maintenance()
+
+        with patch.object(self.window, "show_predictive_maintenance") as refresh_predictive:
+            self.window.refresh_current_views()
+
+        refresh_predictive.assert_called_once_with()
 
 
 def _paths(root: Path) -> AppPaths:

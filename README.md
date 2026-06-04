@@ -58,7 +58,7 @@ Do not commit:
 
 ## Roles and PINs
 
-BeeLine starts in Viewer mode. Any user can report a new issue. Viewer can inspect machines, active issues, resolved history, predictive information, and dashboard issue search. Technician can resolve issues. Admin can open Settings, manage app-level preferences, and log out.
+BeeLine starts in Viewer mode. Any user can report a new issue. Viewer can inspect machines, active issues, resolved history, and dashboard issue search. Technician can resolve issues. Admin can open Predictive Maintenance, Settings, manage app-level preferences, and log out.
 
 Local config can define roles:
 
@@ -80,7 +80,7 @@ The Hive Dashboard shows responsive machine cards when the search box is empty. 
 
 Use `View All Open Issues` to open the global Open Issues page. That page shows active issues across all machines with search, severity, machine, area/cell, sort, and latest filters.
 
-Use `Predictive Maintenance` to open the global predictive maintenance page. It ranks machines by explainable local risk score, shows active predictive alerts, recurring patterns, a global trend chart, and category breakdown. Summaries can be copied or exported locally to the ignored `exports/` folder.
+Admins can use `Predictive Maintenance` to open the global predictive maintenance page. It ranks machines by explainable local risk score, shows active predictive alerts, recurring patterns, a global trend chart, and category breakdown. Summaries can be copied or exported locally to the ignored `exports/` folder.
 
 Machine Cell pages prioritize machine status, maintenance intelligence, active issues, and resolved issues. `Report Problem` appears with the Active/Open Issues section. Troubleshooting Memory appears lower on the page after the issue tables. Issue rows can be opened with the `Open` button, double-click, or Enter on the selected row.
 

@@ -21,9 +21,14 @@ from beeline_issue_tracker.domain import (
     display_issue_id,
 )
 from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
-from beeline_issue_tracker.ui.issue_list_model import format_duration_between, format_timestamp, preview_text
-from beeline_issue_tracker.ui.theme import ThemeManager
-from beeline_issue_tracker.ui.widgets import BrandHeader, HoneycombBackground, MachineCard, MetricPill, SearchBox, StatusBadge
+from beeline_issue_tracker.special import (
+    PlantDeteriorationState,
+    SpecialEffectsSettings,
+    calculate_plant_deterioration,
+)
+from beeline_issue_tracker.ui_v2.issue_list_model import format_duration_between, format_timestamp, preview_text
+from beeline_issue_tracker.ui_v2.theme import ThemeManager
+from beeline_issue_tracker.ui_v2.widgets import BrandHeader, HoneycombBackground, MachineCard, MetricPill, SearchBox, StatusBadge
 
 
 MIN_CARD_WIDTH = 320
@@ -34,6 +39,8 @@ class HiveDashboardPage(HoneycombBackground):
     issue_detail_requested = Signal(str, int)
     open_issues_requested = Signal()
     predictive_requested = Signal()
+    special_state_changed = Signal(object)
+    falling_drip_requested = Signal(str, str, object, int)
 
     def __init__(self, repository: IssueRepository, theme_manager: ThemeManager, paths: AppPaths, parent=None):
         super().__init__(theme_manager, parent)
@@ -42,6 +49,9 @@ class HiveDashboardPage(HoneycombBackground):
         self.paths = paths
         self._machines: list[MachineSummary] = []
         self._machine_cards: dict[str, MachineCard] = {}
+        self._special_settings = SpecialEffectsSettings()
+        self._special_state = calculate_plant_deterioration((), self._special_settings)
+        self._special_tick = 0
         self._last_card_layout: tuple[tuple[str, ...], int] | None = None
         self._search_results: list[IssueSearchResult] = []
         self._deep_task: DeepArchiveSearchTask | None = None
@@ -53,6 +63,9 @@ class HiveDashboardPage(HoneycombBackground):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(180)
         self._search_timer.timeout.connect(self._render_dashboard)
+        self._special_timer = QTimer(self)
+        self._special_timer.setInterval(66)
+        self._special_timer.timeout.connect(self._advance_special_effects)
 
         page_layout = QVBoxLayout(self)
         page_layout.setContentsMargins(24, 22, 24, 22)
@@ -94,7 +107,7 @@ class HiveDashboardPage(HoneycombBackground):
 
         controls_panel = QFrame()
         controls_panel.setObjectName("infoPanel")
-        controls = QHBoxLayout(controls_panel)
+        controls = QVBoxLayout(controls_panel)
         controls.setContentsMargins(14, 12, 14, 12)
         controls.setSpacing(10)
         self.search = SearchBox("Search issues, history, fixes, people, machines...")
@@ -135,18 +148,22 @@ class HiveDashboardPage(HoneycombBackground):
         self.cell_filter = QComboBox()
         self.cell_filter.setObjectName("compactDropdown")
         self.cell_filter.currentIndexChanged.connect(self._render_dashboard)
-        controls.addWidget(self.search, 1)
-        controls.addWidget(QLabel("State"))
-        controls.addWidget(self.issue_state)
-        controls.addWidget(QLabel("Mode"))
-        controls.addWidget(self.search_mode)
-        controls.addWidget(self.cancel_deep)
-        controls.addWidget(QLabel("Sort"))
-        controls.addWidget(self.sort)
-        controls.addWidget(QLabel("Area"))
-        controls.addWidget(self.area_filter)
-        controls.addWidget(QLabel("Cell"))
-        controls.addWidget(self.cell_filter)
+        controls.addWidget(self.search)
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(10)
+        filter_row.addWidget(QLabel("State"))
+        filter_row.addWidget(self.issue_state)
+        filter_row.addWidget(QLabel("Mode"))
+        filter_row.addWidget(self.search_mode)
+        filter_row.addWidget(self.cancel_deep)
+        filter_row.addWidget(QLabel("Sort"))
+        filter_row.addWidget(self.sort)
+        filter_row.addWidget(QLabel("Area"))
+        filter_row.addWidget(self.area_filter)
+        filter_row.addWidget(QLabel("Cell"))
+        filter_row.addWidget(self.cell_filter)
+        filter_row.addStretch(1)
+        controls.addLayout(filter_row)
         page_layout.addWidget(controls_panel)
 
         self.scroll = QScrollArea()
@@ -179,12 +196,25 @@ class HiveDashboardPage(HoneycombBackground):
         self._machines = self.repository.list_machines_with_status()
         perf_log("repo.list_machines_with_status", count=len(self._machines), elapsed_ms=elapsed_ms(call_started))
         self._update_summary()
+        self._recalculate_special_state()
         self._update_filter_options()
         self._render_dashboard()
         perf_log("dashboard.refresh_internal", machines=len(self._machines), elapsed_ms=elapsed_ms(started_at))
 
+    @property
+    def special_state(self) -> PlantDeteriorationState:
+        return self._special_state
+
+    def set_special_effects_settings(self, settings: SpecialEffectsSettings) -> None:
+        self._special_settings = settings
+        self._recalculate_special_state()
+        self._apply_special_effects_to_cards()
+
     def set_can_open_predictive_maintenance(self, enabled: bool) -> None:
         self.predictive_button.setVisible(enabled)
+
+    def special_effects_settings(self) -> SpecialEffectsSettings:
+        return self._special_settings
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -201,6 +231,16 @@ class HiveDashboardPage(HoneycombBackground):
         self.line_down_pill.set_value(str(line_down_total))
         self.non_critical_pill.set_value(str(non_critical_total))
         self.no_issues_pill.set_value(str(no_issues_total))
+
+    def _recalculate_special_state(self) -> None:
+        next_state = calculate_plant_deterioration(self._machines, self._special_settings)
+        self._special_state = next_state
+        self.special_state_changed.emit(next_state)
+        if next_state.effect_active and not self._special_timer.isActive():
+            self._special_timer.start()
+        elif not next_state.effect_active and self._special_timer.isActive():
+            self._special_timer.stop()
+            self._special_tick = 0
 
     def _update_filter_options(self) -> None:
         self._set_filter_options(self.area_filter, sorted({m.area for m in self._machines if m.area}))
@@ -261,6 +301,7 @@ class HiveDashboardPage(HoneycombBackground):
             else:
                 card.update_machine(machine)
                 updated += 1
+            card.set_special_effect_state(self._special_state, self._special_tick, self._special_settings)
             card.show()
             if layout_rebuilt:
                 self.grid.addWidget(card, index // columns, index % columns)
@@ -281,6 +322,18 @@ class HiveDashboardPage(HoneycombBackground):
             layout_rebuilt=layout_rebuilt,
             elapsed_ms=elapsed_ms(started_at),
         )
+
+    def _advance_special_effects(self) -> None:
+        if not self._special_state.effect_active:
+            return
+        self._special_tick += 1
+        self._apply_special_effects_to_cards()
+
+    def _apply_special_effects_to_cards(self) -> None:
+        for card in self._machine_cards.values():
+            card.set_special_effect_state(self._special_state, self._special_tick, self._special_settings)
+            for machine_number, status, origin, seed in card.take_pending_falling_drips(self):
+                self.falling_drip_requested.emit(machine_number, status, origin, seed)
 
     def _render_issue_results(self) -> None:
         self._cancel_deep_search(quiet=True)
