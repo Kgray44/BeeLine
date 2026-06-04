@@ -24,6 +24,7 @@ from beeline_issue_tracker.ui_v2.issue_list_model import format_duration_between
 from beeline_issue_tracker.ui_v2.theme import ThemeManager, repolish, status_state
 from beeline_issue_tracker.ui_v2.widgets import (
     BrandHeader,
+    EmptyStatePanel,
     HoneycombBackground,
     InfoRow,
     MetricPill,
@@ -51,9 +52,11 @@ class IssueDetailPage(HoneycombBackground):
 
         nav = QHBoxLayout()
         self.back_button = QPushButton("Back")
+        self.back_button.setObjectName("quietButton")
         self.back_button.clicked.connect(self.back_requested.emit)
         nav.addWidget(self.back_button)
         self.machine_button = QPushButton("Go to Machine")
+        self.machine_button.setObjectName("secondaryButton")
         self.machine_button.clicked.connect(self._go_to_machine)
         nav.addWidget(self.machine_button)
         nav.addStretch(1)
@@ -245,9 +248,16 @@ class IssueDetailPage(HoneycombBackground):
         fix_suggestions: list[FixSuggestion] | None = None,
         recurring_patterns: list[RecurringIssuePattern] | None = None,
     ) -> None:
-        self._add_related_panel(related_matches or related_issues)
-        self._add_fix_suggestions_panel(fix_suggestions or [])
-        self._add_recurring_patterns_panel(recurring_patterns or [])
+        related = related_matches or related_issues
+        suggestions = fix_suggestions or []
+        patterns = recurring_patterns or []
+        has_intelligence = bool(related or suggestions or patterns or attachments)
+        if related:
+            self._add_related_panel(related)
+        if suggestions:
+            self._add_fix_suggestions_panel(suggestions)
+        if patterns:
+            self._add_recurring_patterns_panel(patterns)
         if trend_summary:
             trend_text = (
                 f"Active: {trend_summary.get('active', 0)} | "
@@ -255,13 +265,17 @@ class IssueDetailPage(HoneycombBackground):
                 f"Line down now: {trend_summary.get('line_down_active', 0)}"
             )
             self._add_text_panel("Trends", trend_text)
-        attachment_text = "None"
         if attachments:
             attachment_text = "\n".join(
                 f"{attachment.original_filename}{f' - {attachment.note}' if attachment.note else ''}"
                 for attachment in attachments
             )
-        self._add_text_panel("Attachments", attachment_text)
+            self._add_text_panel("Attachments", attachment_text)
+        if not has_intelligence:
+            self._add_empty_state(
+                "No related history yet",
+                "BeeLine will suggest fixes once similar resolved issues exist.",
+            )
 
     def _add_recurring_patterns_panel(self, patterns: list[RecurringIssuePattern]) -> None:
         if not patterns:
@@ -273,6 +287,8 @@ class IssueDetailPage(HoneycombBackground):
         self._add_text_panel("Similar Recurring Patterns", text)
 
     def _add_fix_suggestions_panel(self, suggestions: list[FixSuggestion]) -> None:
+        if not suggestions:
+            return
         panel = QFrame()
         panel.setObjectName("infoPanel")
         layout = QVBoxLayout(panel)
@@ -281,24 +297,20 @@ class IssueDetailPage(HoneycombBackground):
         title = QLabel("Suggested Fixes")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
-        if not suggestions:
-            placeholder = QLabel("No related resolved history with solution text is available yet.")
-            placeholder.setObjectName("mutedLabel")
-            placeholder.setWordWrap(True)
-            layout.addWidget(placeholder)
-        else:
-            for suggestion in suggestions:
-                body = QLabel(
-                    f"{suggestion.title} | Confidence: {suggestion.confidence} | "
-                    f"Based on {suggestion.based_on_count} resolved issue(s)\n"
-                    f"{suggestion.suggestion}\n{suggestion.caution}"
-                )
-                body.setWordWrap(True)
-                body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                layout.addWidget(body)
+        for suggestion in suggestions:
+            body = QLabel(
+                f"{suggestion.title} | Confidence: {suggestion.confidence} | "
+                f"Based on {suggestion.based_on_count} resolved issue(s)\n"
+                f"{suggestion.suggestion}\n{suggestion.caution}"
+            )
+            body.setWordWrap(True)
+            body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            layout.addWidget(body)
         self.content_layout.addWidget(panel)
 
     def _add_related_panel(self, related_issues: list[ResolvedIssue] | list[RelatedIssueMatch]) -> None:
+        if not related_issues:
+            return
         panel = QFrame()
         panel.setObjectName("infoPanel")
         layout = QVBoxLayout(panel)
@@ -307,35 +319,32 @@ class IssueDetailPage(HoneycombBackground):
         title = QLabel("Related Issues")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
-        if not related_issues:
-            placeholder = QLabel("Related issue suggestions will appear here once enough resolved history is available.")
-            placeholder.setObjectName("mutedLabel")
-            placeholder.setWordWrap(True)
-            layout.addWidget(placeholder)
-        else:
-            for issue in related_issues:
-                row = QHBoxLayout()
-                if isinstance(issue, RelatedIssueMatch):
-                    reasons = " | ".join(issue.match_reasons)
-                    label_text = (
-                        f"{preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at or '')} | "
-                        f"Match {issue.match_score}: {reasons}"
-                    )
-                    issue_id = issue.issue_id
-                else:
-                    label_text = f"{display_issue_id(issue)} | {preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at)}"
-                    issue_id = issue.id
-                label = QLabel(label_text)
-                label.setWordWrap(True)
-                row.addWidget(label, 1)
-                button = QPushButton("Open")
-                button.setObjectName("tableActionButton")
-                button.clicked.connect(
-                    lambda _checked=False, resolved_issue_id=issue_id: self.related_issue_requested.emit("resolved", resolved_issue_id)
+        for issue in related_issues:
+            row = QHBoxLayout()
+            if isinstance(issue, RelatedIssueMatch):
+                reasons = " | ".join(issue.match_reasons)
+                label_text = (
+                    f"{preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at or '')} | "
+                    f"Match {issue.match_score}: {reasons}"
                 )
-                row.addWidget(button)
-                layout.addLayout(row)
+                issue_id = issue.issue_id
+            else:
+                label_text = f"{display_issue_id(issue)} | {preview_text(issue.title, 80)} | {format_timestamp(issue.resolved_at)}"
+                issue_id = issue.id
+            label = QLabel(label_text)
+            label.setWordWrap(True)
+            row.addWidget(label, 1)
+            button = QPushButton("Open")
+            button.setObjectName("tableActionButton")
+            button.clicked.connect(
+                lambda _checked=False, resolved_issue_id=issue_id: self.related_issue_requested.emit("resolved", resolved_issue_id)
+            )
+            row.addWidget(button)
+            layout.addLayout(row)
         self.content_layout.addWidget(panel)
+
+    def _add_empty_state(self, title: str, body: str) -> None:
+        self.content_layout.addWidget(EmptyStatePanel(title, body))
 
     def _clear_content(self) -> None:
         while self.content_layout.count():

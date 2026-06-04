@@ -122,6 +122,7 @@ class LogIssuePage(HoneycombBackground):
         actions = QHBoxLayout()
         actions.addStretch(1)
         cancel = QPushButton("Cancel")
+        cancel.setObjectName("quietButton")
         cancel.clicked.connect(self.cancel_requested.emit)
         save = QPushButton("Save Issue")
         save.setObjectName("primaryButton")
