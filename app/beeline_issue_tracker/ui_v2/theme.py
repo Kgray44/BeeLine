@@ -522,11 +522,19 @@ def build_stylesheet(theme: ThemeTokens | str | None = None) -> str:
         border-left: 5px solid {tokens.status_line_down};
     }}
 
+    QFrame#machineCard[statusState="line_down"] {{
+        background-color: {tokens.panel_hover};
+    }}
+
     QFrame#machineCard[statusState="non_critical"],
     QFrame#machineHeader[statusState="non_critical"],
     QFrame#summaryHero[statusState="non_critical"],
     QFrame#issueCard[statusState="non_critical"] {{
         border-left: 5px solid {tokens.status_non_critical};
+    }}
+
+    QFrame#machineCard[statusState="non_critical"] {{
+        background-color: {tokens.background_subtle};
     }}
 
     QFrame#machineCard[statusState="no_issues"],

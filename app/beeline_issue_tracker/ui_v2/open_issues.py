@@ -19,11 +19,19 @@ from PySide6.QtWidgets import (
 
 from beeline_issue_tracker.config import AppPaths
 from beeline_issue_tracker.data.repository import IssueRepository
-from beeline_issue_tracker.domain import ACTIVE_SEVERITIES, Issue, MachineSummary, display_issue_id
+from beeline_issue_tracker.domain import ACTIVE_SEVERITIES, LINE_DOWN, NON_CRITICAL, Issue, MachineSummary, display_issue_id
 from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui_v2.issue_list_model import DATE_DESC, format_duration_between, format_timestamp, preview_text
 from beeline_issue_tracker.ui_v2.theme import ThemeManager
-from beeline_issue_tracker.ui_v2.widgets import BrandHeader, HoneycombBackground, LatestCountDropdown, SearchBox, StatusBadge
+from beeline_issue_tracker.ui_v2.widgets import (
+    BrandHeader,
+    EmptyStatePanel,
+    HoneycombBackground,
+    LatestCountDropdown,
+    MetricPill,
+    SearchBox,
+    StatusBadge,
+)
 
 
 @dataclass(frozen=True)
@@ -100,6 +108,7 @@ class OpenIssuesPage(HoneycombBackground):
 
         header = QHBoxLayout()
         back = QPushButton("Back to Dashboard")
+        back.setObjectName("quietButton")
         back.clicked.connect(self.back_requested.emit)
         header.addWidget(back)
         header.addWidget(BrandHeader("Open Issues", "All active issues across the hive", paths.logo_path(), theme_manager), 1)
@@ -157,10 +166,29 @@ class OpenIssuesPage(HoneycombBackground):
         controls.addWidget(self.latest)
         page.addWidget(controls_panel)
 
-        self.empty_label = QLabel()
-        self.empty_label.setObjectName("mutedLabel")
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        page.addWidget(self.empty_label)
+        self.summary_panel = QFrame()
+        self.summary_panel.setObjectName("infoPanel")
+        summary = QHBoxLayout(self.summary_panel)
+        summary.setContentsMargins(14, 12, 14, 12)
+        summary.setSpacing(10)
+        self.total_open_pill = MetricPill("Total Open")
+        self.line_down_pill = MetricPill("Line Down")
+        self.non_critical_pill = MetricPill("Non-Critical")
+        self.machines_affected_pill = MetricPill("Machines Affected")
+        self.oldest_open_pill = MetricPill("Oldest Open")
+        for pill in (
+            self.total_open_pill,
+            self.line_down_pill,
+            self.non_critical_pill,
+            self.machines_affected_pill,
+            self.oldest_open_pill,
+        ):
+            summary.addWidget(pill)
+        summary.addStretch(1)
+        page.addWidget(self.summary_panel)
+
+        self.empty_panel = EmptyStatePanel()
+        page.addWidget(self.empty_panel)
 
         self.table = QTableWidget()
         self.table.setObjectName("issueTable")
@@ -171,6 +199,7 @@ class OpenIssuesPage(HoneycombBackground):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setShowGrid(False)
+        self.table.setWordWrap(True)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.itemDoubleClicked.connect(self._open_table_item)
@@ -182,9 +211,10 @@ class OpenIssuesPage(HoneycombBackground):
         self.apply_snapshot(load_open_issues_snapshot(self.repository, **self.current_query()))
 
     def show_loading(self) -> None:
-        self.empty_label.setVisible(True)
-        self.empty_label.setText("Loading open issues...")
+        self.empty_panel.setVisible(True)
+        self.empty_panel.set_text("Loading open issues", "BeeLine is fetching the current active issue list.")
         self.table.setVisible(False)
+        self._adjust_table_height(0)
         self._visible_issues = []
 
     def current_query(self) -> dict[str, object]:
@@ -202,11 +232,13 @@ class OpenIssuesPage(HoneycombBackground):
         self._machines = list(snapshot.machines)
         self._machine_map = {machine.machine_number: machine for machine in self._machines}
         self._update_filter_options()
-        self._populate_table(list(snapshot.issues))
+        issues = list(snapshot.issues)
+        self._update_summary(issues)
+        self._populate_table(issues)
 
     def _configure_table(self) -> None:
         header = self.table.horizontalHeader()
-        widths = (150, 155, 210, 126, 280, 120, 145, 82, 110, 190)
+        widths = (150, 190, 210, 126, 280, 120, 145, 82, 110, 240)
         for column, width in enumerate(widths):
             self.table.setColumnWidth(column, width)
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
@@ -244,6 +276,14 @@ class OpenIssuesPage(HoneycombBackground):
         combo.setCurrentIndex(next_index if next_index >= 0 else 0)
         combo.blockSignals(False)
 
+    def _update_summary(self, issues: list[Issue]) -> None:
+        self.total_open_pill.set_value(str(len(issues)))
+        self.line_down_pill.set_value(str(sum(1 for issue in issues if issue.severity == LINE_DOWN)))
+        self.non_critical_pill.set_value(str(sum(1 for issue in issues if issue.severity == NON_CRITICAL)))
+        self.machines_affected_pill.set_value(str(len({issue.machine_number for issue in issues})))
+        oldest = min((issue.created_at for issue in issues if issue.created_at), default="")
+        self.oldest_open_pill.set_value(format_duration_between(oldest) if oldest else "-")
+
     def _populate_table(self, issues: list[Issue]) -> None:
         started_at = perf_now()
         self.table.setUpdatesEnabled(False)
@@ -251,31 +291,53 @@ class OpenIssuesPage(HoneycombBackground):
         try:
             self._visible_issues = issues
             self.table.setRowCount(0)
-            self.empty_label.setVisible(not issues)
+            self.empty_panel.setVisible(not issues)
             self.table.setVisible(bool(issues))
             if not issues:
-                self.empty_label.setText("No open issues match the current filters.")
+                if self.search.text().strip():
+                    self.empty_panel.set_text(
+                        "No matching issues found",
+                        "Try a different keyword, machine number, category, or status.",
+                    )
+                else:
+                    self.empty_panel.set_text("No open issues", "The hive is clear right now.")
+                self._adjust_table_height(0)
                 return
             self.table.setRowCount(len(issues))
             for row, issue in enumerate(issues):
                 machine = self._machine_map.get(issue.machine_number)
-                machine_label = issue.machine_number if machine is None else f"{issue.machine_number} | {machine.name}"
+                machine_label = issue.machine_number if machine is None else f"{issue.machine_number}\n{machine.name}"
+                machine_tooltip = issue.machine_number if machine is None else f"{issue.machine_number} | {machine.name}"
                 self.table.setItem(row, 0, self._item(display_issue_id(issue)))
-                self.table.setItem(row, 1, self._item(machine_label))
+                self.table.setItem(row, 1, self._item(machine_label, machine_tooltip))
                 self.table.setItem(row, 2, self._item(preview_text(issue.title, 64), issue.title))
                 self.table.setCellWidget(row, 3, self._centered_widget(StatusBadge(issue.severity)))
                 self.table.setItem(row, 4, self._item(preview_text(issue.description, 92), issue.description))
                 self.table.setItem(row, 5, self._item(issue.logged_by))
                 self.table.setItem(row, 6, self._item(format_timestamp(issue.created_at), issue.created_at))
                 self.table.setItem(row, 7, self._item(format_duration_between(issue.created_at)))
-                self.table.setItem(row, 8, self._item(issue.category or "-"))
+                self.table.setItem(row, 8, self._item(issue.category or "-", issue.category or None))
                 self.table.setCellWidget(row, 9, self._actions_widget(issue))
-                self.table.setRowHeight(row, 54)
+                self.table.setRowHeight(row, 60)
             self.table.clearSelection()
+            self._adjust_table_height(len(issues))
         finally:
             self.table.blockSignals(False)
             self.table.setUpdatesEnabled(True)
             perf_log("open_issues.render_table", rows=len(issues), elapsed_ms=elapsed_ms(started_at))
+
+    def _adjust_table_height(self, visible_count: int) -> None:
+        if visible_count <= 0:
+            self.table.setMinimumHeight(0)
+            self.table.setMaximumHeight(0)
+            return
+        header_height = self.table.horizontalHeader().height() or 38
+        row_height = 60
+        padding = 14
+        visible_rows = min(visible_count, 6)
+        height = header_height + visible_rows * row_height + padding
+        self.table.setMinimumHeight(height)
+        self.table.setMaximumHeight(height if visible_count <= 3 else 16777215)
 
     def _queue_search_refresh(self) -> None:
         self._search_timer.start()
@@ -289,14 +351,10 @@ class OpenIssuesPage(HoneycombBackground):
         open_button = QPushButton("Open")
         open_button.setObjectName("tableActionButton")
         open_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self.issue_open_requested.emit("active", issue_id))
-        machine_button = QPushButton("Machine")
-        machine_button.setObjectName("tableActionButton")
-        machine_button.clicked.connect(lambda _checked=False, machine_number=issue.machine_number: self.machine_requested.emit(machine_number))
         resolve_button = QPushButton("Resolve")
         resolve_button.setObjectName("tableActionButton")
         resolve_button.clicked.connect(lambda _checked=False, issue_id=issue.id: self.resolve_issue_requested.emit(issue_id))
         layout.addWidget(open_button)
-        layout.addWidget(machine_button)
         layout.addWidget(resolve_button)
         return host
 
@@ -304,7 +362,11 @@ class OpenIssuesPage(HoneycombBackground):
         row = item.row()
         if row < 0 or row >= len(self._visible_issues):
             return
-        self.issue_open_requested.emit("active", self._visible_issues[row].id)
+        issue = self._visible_issues[row]
+        if item.column() == 1:
+            self.machine_requested.emit(issue.machine_number)
+            return
+        self.issue_open_requested.emit("active", issue.id)
 
     @staticmethod
     def _item(text: str, tooltip: str | None = None) -> QTableWidgetItem:
