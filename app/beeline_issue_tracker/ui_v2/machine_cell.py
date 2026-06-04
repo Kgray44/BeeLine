@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -21,9 +20,11 @@ from beeline_issue_tracker.data.repository import IssueRepository
 from beeline_issue_tracker.domain import Issue, MachineResolvedStats, MachineSummary, ResolvedIssue
 from beeline_issue_tracker.perf import elapsed_ms, log as perf_log, now as perf_now
 from beeline_issue_tracker.ui_v2.charts import RiskScoreBar
+from beeline_issue_tracker.ui_v2.risk_widgets import create_risk_reason_row, parse_risk_reasons
 from beeline_issue_tracker.ui_v2.theme import ThemeManager, repolish, status_state
 from beeline_issue_tracker.ui_v2.widgets import (
     BrandHeader,
+    EmptyStatePanel,
     HoneycombBackground,
     IssueListView,
     MetricPill,
@@ -238,48 +239,66 @@ class MachineCellPage(HoneycombBackground):
         self.intelligence_panel.setObjectName("infoPanel")
         intelligence_layout = QVBoxLayout(self.intelligence_panel)
         intelligence_layout.setContentsMargins(16, 12, 16, 12)
-        intelligence_layout.setSpacing(8)
+        intelligence_layout.setSpacing(10)
+
+        intelligence_title_row = QHBoxLayout()
         intelligence_title = QLabel("Maintenance Intelligence")
         intelligence_title.setObjectName("sectionTitle")
-        intelligence_layout.addWidget(intelligence_title)
-        intelligence_grid = QGridLayout()
-        intelligence_grid.setHorizontalSpacing(12)
-        intelligence_grid.setVerticalSpacing(6)
+        intelligence_title_row.addWidget(intelligence_title, 1)
+        info_button = QPushButton("Machine Info")
+        info_button.setObjectName("secondaryButton")
+        info_button.clicked.connect(lambda _checked=False: self._request_machine_details("overview"))
+        intelligence_title_row.addWidget(info_button)
+        intelligence_layout.addLayout(intelligence_title_row)
+
         self.risk_score_bar = RiskScoreBar(theme_manager)
-        intelligence_grid.addWidget(self.risk_score_bar, 0, 0, 1, 4)
+        intelligence_layout.addWidget(self.risk_score_bar)
+
+        intelligence_metrics = QHBoxLayout()
+        intelligence_metrics.setSpacing(10)
         self.intelligence_confidence = QLabel()
-        self.intelligence_confidence.setObjectName("mutedLabel")
+        self.intelligence_confidence.setObjectName("metricValue")
+        self.intelligence_recurring = QLabel()
+        self.intelligence_recurring.setObjectName("metricValue")
+        self.intelligence_last_issue = QLabel()
+        self.intelligence_last_issue.setObjectName("mutedLabel")
+        for label, value in (
+            ("Confidence", self.intelligence_confidence),
+            ("Recurring", self.intelligence_recurring),
+        ):
+            metric = QFrame()
+            metric.setObjectName("factCard")
+            metric_layout = QVBoxLayout(metric)
+            metric_layout.setContentsMargins(10, 8, 10, 8)
+            metric_layout.setSpacing(2)
+            metric_label = QLabel(label)
+            metric_label.setObjectName("metricLabel")
+            metric_layout.addWidget(metric_label)
+            metric_layout.addWidget(value)
+            intelligence_metrics.addWidget(metric)
+        intelligence_metrics.addStretch(1)
+        intelligence_layout.addLayout(intelligence_metrics)
+
         self.intelligence_predicted_problem = QLabel()
         self.intelligence_predicted_problem.setWordWrap(True)
         self.intelligence_suggested_action = QLabel()
         self.intelligence_suggested_action.setWordWrap(True)
-        self.intelligence_reasons = QLabel()
-        self.intelligence_reasons.setObjectName("mutedLabel")
-        self.intelligence_reasons.setWordWrap(True)
-        self.intelligence_recurring = QLabel()
-        self.intelligence_recurring.setObjectName("mutedLabel")
-        self.intelligence_last_issue = QLabel()
-        self.intelligence_last_issue.setObjectName("mutedLabel")
-        intelligence_grid.addWidget(QLabel("Confidence"), 1, 0)
-        intelligence_grid.addWidget(self.intelligence_confidence, 1, 1)
-        intelligence_grid.addWidget(QLabel("Recurring"), 1, 2)
-        intelligence_grid.addWidget(self.intelligence_recurring, 1, 3)
-        intelligence_grid.addWidget(QLabel("Predicted Problem"), 2, 0)
-        intelligence_grid.addWidget(self.intelligence_predicted_problem, 2, 1, 1, 3)
-        intelligence_grid.addWidget(QLabel("Suggested Action"), 3, 0)
-        intelligence_grid.addWidget(self.intelligence_suggested_action, 3, 1, 1, 3)
-        intelligence_grid.addWidget(QLabel("Risk Reasons"), 4, 0)
-        intelligence_grid.addWidget(self.intelligence_reasons, 4, 1, 1, 3)
-        intelligence_grid.addWidget(QLabel("Last Issue"), 5, 0)
-        intelligence_grid.addWidget(self.intelligence_last_issue, 5, 1, 1, 3)
-        intelligence_layout.addLayout(intelligence_grid)
-        intelligence_buttons = QHBoxLayout()
-        info_button = QPushButton("Machine Info")
-        info_button.setObjectName("tableActionButton")
-        info_button.clicked.connect(lambda _checked=False: self._request_machine_details("overview"))
-        intelligence_buttons.addWidget(info_button)
-        intelligence_buttons.addStretch(1)
-        intelligence_layout.addLayout(intelligence_buttons)
+
+        predicted_label = QLabel("Predicted Problem")
+        predicted_label.setObjectName("metricLabel")
+        intelligence_layout.addWidget(predicted_label)
+        intelligence_layout.addWidget(self.intelligence_predicted_problem)
+        action_label = QLabel("Suggested Action")
+        action_label.setObjectName("metricLabel")
+        intelligence_layout.addWidget(action_label)
+        intelligence_layout.addWidget(self.intelligence_suggested_action)
+        reasons_label = QLabel("Why this machine is risky")
+        reasons_label.setObjectName("metricLabel")
+        intelligence_layout.addWidget(reasons_label)
+        self.risk_reasons_layout = QVBoxLayout()
+        self.risk_reasons_layout.setSpacing(6)
+        intelligence_layout.addLayout(self.risk_reasons_layout)
+        intelligence_layout.addWidget(self.intelligence_last_issue)
         body.addWidget(self.intelligence_panel)
 
         self.active_list = IssueListView(
@@ -446,7 +465,7 @@ class MachineCellPage(HoneycombBackground):
         self.intelligence_confidence.setText(risk.confidence)
         self.intelligence_predicted_problem.setText(risk.predicted_problem)
         self.intelligence_suggested_action.setText(risk.suggested_action)
-        self.intelligence_reasons.setText(" | ".join(risk.risk_reasons[:3]))
+        self._set_risk_reason_rows(risk.risk_reasons)
         self.intelligence_recurring.setText(str(risk.recurring_issue_count))
         avg = _format_minutes(risk.average_time_open_minutes)
         last_issue = risk.last_issue_at or "-"
@@ -457,7 +476,7 @@ class MachineCellPage(HoneycombBackground):
         self.intelligence_confidence.setText("Loading")
         self.intelligence_predicted_problem.setText("Loading machine intelligence...")
         self.intelligence_suggested_action.setText("Loading")
-        self.intelligence_reasons.setText("Loading")
+        self._set_risk_reason_rows([], title="Loading intelligence", body="Risk reasons will appear here shortly.")
         self.intelligence_recurring.setText("-")
         self.intelligence_last_issue.setText("-")
 
@@ -466,9 +485,35 @@ class MachineCellPage(HoneycombBackground):
         self.intelligence_confidence.setText("Unknown")
         self.intelligence_predicted_problem.setText("No clear recurring problem")
         self.intelligence_suggested_action.setText("No action needed beyond normal checks.")
-        self.intelligence_reasons.setText("Not enough issue history yet.")
+        self._set_risk_reason_rows(
+            [],
+            title="Not enough issue history yet",
+            body="BeeLine will improve predictions as issues are logged and resolved.",
+        )
         self.intelligence_recurring.setText("0")
         self.intelligence_last_issue.setText("-")
+
+    def _set_risk_reason_rows(
+        self,
+        reasons,
+        *,
+        title: str = "No specific risk reasons yet",
+        body: str = "BeeLine will show contributing factors here as patterns appear.",
+    ) -> None:
+        self._clear_risk_reason_rows()
+        parsed = parse_risk_reasons(reasons)
+        if not parsed:
+            self.risk_reasons_layout.addWidget(EmptyStatePanel(title, body))
+            return
+        for reason in parsed[:5]:
+            self.risk_reasons_layout.addWidget(create_risk_reason_row(reason))
+
+    def _clear_risk_reason_rows(self) -> None:
+        while self.risk_reasons_layout.count():
+            item = self.risk_reasons_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
 
 
 def _memory_text(stats) -> str:

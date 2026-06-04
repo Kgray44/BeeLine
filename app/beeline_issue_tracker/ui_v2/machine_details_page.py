@@ -142,6 +142,7 @@ class MachineDetailsPage(HoneycombBackground):
         self.active_history_list: IssueListView | None = None
         self.resolved_history_list: IssueListView | None = None
         self._sections: dict[str, QWidget] = {}
+        self._section_nav_buttons: dict[str, QPushButton] = {}
 
         page = QVBoxLayout(self)
         page.setContentsMargins(24, 22, 24, 22)
@@ -149,11 +150,13 @@ class MachineDetailsPage(HoneycombBackground):
 
         header = QHBoxLayout()
         self.back_button = QPushButton("Back to Machine")
+        self.back_button.setObjectName("quietButton")
         self.back_button.clicked.connect(self.back_requested.emit)
         header.addWidget(self.back_button)
         self.brand_header = BrandHeader("Machine Info", "", paths.logo_path(), theme_manager)
         header.addWidget(self.brand_header, 1)
         page.addLayout(header)
+        page.addLayout(self._build_section_nav())
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -211,7 +214,6 @@ class MachineDetailsPage(HoneycombBackground):
             return
 
         self._add_summary_hero(summary, active_issues, resolved_issues, summary.open_issue_count, stats.total_resolved)
-        self._add_current_status(summary, active_issues, resolved_issues, summary.open_issue_count, stats.total_resolved)
         self._add_predictive(snapshot.risk)
         self._add_issue_history(summary.machine_number, active_issues, resolved_issues, stats, summary.open_issue_count)
         self._add_trends(snapshot)
@@ -480,6 +482,24 @@ class MachineDetailsPage(HoneycombBackground):
         logger.debug("Add Issue clicked for machine %s", machine_number)
         self.log_issue_requested.emit(machine_number)
 
+    def _build_section_nav(self) -> QHBoxLayout:
+        nav = QHBoxLayout()
+        nav.setSpacing(8)
+        for label, section in (
+            ("Overview", "overview"),
+            ("Predictive", "predictive"),
+            ("Issue History", "history"),
+            ("Trends", "trends"),
+            ("Memory", "memory"),
+        ):
+            button = QPushButton(label)
+            button.setObjectName("sectionNavButton")
+            button.clicked.connect(lambda _checked=False, target=section: self._focus_section(target))
+            self._section_nav_buttons[section] = button
+            nav.addWidget(button)
+        nav.addStretch(1)
+        return nav
+
     def _panel(self, title: str, section: str) -> QFrame:
         panel = QFrame()
         panel.setObjectName("infoPanel")
@@ -510,7 +530,11 @@ class MachineDetailsPage(HoneycombBackground):
         return label
 
     def _focus_section(self, section: str) -> None:
-        target = self._sections.get(section) or self._sections.get("overview")
+        active_section = section if section in self._sections else "overview"
+        for button_section, button in self._section_nav_buttons.items():
+            button.setProperty("active", "true" if button_section == active_section else "false")
+            repolish(button)
+        target = self._sections.get(active_section) or self._sections.get("overview")
         if target is not None:
             self.scroll.ensureWidgetVisible(target, 0, 12)
 
