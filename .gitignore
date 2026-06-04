@@ -4,6 +4,14 @@ __pycache__/
 .venv/
 venv/
 
+# PyInstaller build outputs
+build/
+dist/
+*.toc
+*.pyz
+*.pkg
+*.manifest
+
 # Secrets and local-only environment files
 .env
 .env.*

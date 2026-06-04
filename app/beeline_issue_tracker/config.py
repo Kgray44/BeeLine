@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from shutil import copy2
 
+from beeline_issue_tracker.paths import (
+    bundled_resource_root,
+    default_runtime_root,
+    environment_path,
+    is_frozen,
+    source_project_root,
+)
 from beeline_issue_tracker.security import RoleConfig, verify_pin
 
 
@@ -21,7 +28,7 @@ DEFAULT_SPECIAL_PIN_HASH = (
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return source_project_root()
 
 
 @dataclass(frozen=True)
@@ -169,14 +176,17 @@ class AppPaths:
 
     @classmethod
     def from_environment(cls) -> "AppPaths":
-        root_dir = Path(os.environ.get("BEELINE_ROOT_DIR", project_root())).expanduser().resolve()
-        template_dir = Path(os.environ.get("BEELINE_TEMPLATE_DIR", root_dir / "templates")).expanduser().resolve()
-        config_dir = Path(os.environ.get("BEELINE_CONFIG_DIR", root_dir / "config")).expanduser().resolve()
-        data_dir = Path(os.environ.get("BEELINE_DATA_DIR", root_dir / "data")).expanduser().resolve()
-        archive_dir = Path(os.environ.get("BEELINE_ARCHIVE_DIR", root_dir / "archive")).expanduser().resolve()
-        logs_dir = Path(os.environ.get("BEELINE_LOG_DIR", root_dir / "logs")).expanduser().resolve()
-        backups_dir = Path(os.environ.get("BEELINE_BACKUP_DIR", root_dir / "backups")).expanduser().resolve()
-        branding_dir = root_dir / "assets" / "branding"
+        resource_root = environment_path("BEELINE_RESOURCE_DIR", bundled_resource_root())
+        root_dir = environment_path("BEELINE_ROOT_DIR", default_runtime_root())
+        default_template_dir = resource_root / "templates" if is_frozen() else root_dir / "templates"
+        default_branding_dir = resource_root / "assets" / "branding" if is_frozen() else root_dir / "assets" / "branding"
+        template_dir = environment_path("BEELINE_TEMPLATE_DIR", default_template_dir)
+        config_dir = environment_path("BEELINE_CONFIG_DIR", root_dir / "config")
+        data_dir = environment_path("BEELINE_DATA_DIR", root_dir / "data")
+        archive_dir = environment_path("BEELINE_ARCHIVE_DIR", root_dir / "archive")
+        logs_dir = environment_path("BEELINE_LOG_DIR", root_dir / "logs")
+        backups_dir = environment_path("BEELINE_BACKUP_DIR", root_dir / "backups")
+        branding_dir = environment_path("BEELINE_BRANDING_DIR", default_branding_dir)
         return cls(
             root_dir=root_dir,
             template_dir=template_dir,
@@ -200,14 +210,12 @@ class AppPaths:
         )
 
     def ensure_directories(self) -> None:
-        self.template_dir.mkdir(parents=True, exist_ok=True)
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.backups_dir.mkdir(parents=True, exist_ok=True)
         self.attachments_dir.mkdir(parents=True, exist_ok=True)
-        self.branding_dir.mkdir(parents=True, exist_ok=True)
 
     def logo_path(self) -> Path | None:
         configured = os.environ.get("BEELINE_LOGO_PATH", "").strip()
